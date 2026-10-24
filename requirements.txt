@@ -6,3 +6,5 @@ scipy
 tqdm
 huggingface_hub
 datasets
+numpy
+pytest

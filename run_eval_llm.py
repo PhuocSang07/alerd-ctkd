@@ -35,14 +35,15 @@ def main():
     extra_parser.add_argument("--student_sft", type=str, default=None)
     extra_parser.add_argument("--student_model_type", type=str, default=None)
     extra_parser.add_argument("--teacher_model_type", type=str, default=None)
-    extra_parser.add_argument("--use_lora", type=bool, default=False)
+    extra_parser.add_argument("--use_lora", type=lambda v: str(v).lower() in ("1", "true", "yes"), default=False)
     extra_parser.add_argument("--grad_accum_steps", type=int, default=1)
 
     extras = extra_parser.parse_args(remaining)
 
     set_seed(extras.seed)
 
-    login(args.hf_token)
+    if args.hf_token:
+        login(args.hf_token)
 
     evaluator = Evaluator(
         tokenizer_path=args.student_tokenizer,

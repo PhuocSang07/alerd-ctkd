@@ -1,13 +1,14 @@
 from typing import Optional, Dict, Any
 import torch
-from transformers import AutoModelForCausalLM, AutoConfig
+from transformers import AutoModelForCausalLM
 from transformers.modeling_outputs import ModelOutput
 from dataclasses import dataclass
 from torch import nn, Tensor
 from peft import get_peft_model, LoraConfig, TaskType, PeftModel
-from utils import get_span_hidden_states, get_span_hidden_states_custom
-import re
-    
+
+from layer_capture import LayerCapture
+from utils import get_span_hidden_states
+
 import os
 
 import logging
@@ -24,8 +25,9 @@ class StudentOutput(ModelOutput):
 
 
 class LLMModel(torch.nn.Module):
-    def __init__(self, model_name, load_model_kwargs = {}, hidden_layer_fineturn=[23], 
-                 weight_pooling=True, span_weight=True, lora_conf=None, sft_path=None):
+    def __init__(self, model_name, load_model_kwargs = {}, hidden_layer_fineturn=[23],
+                 weight_pooling=True, span_weight=True, lora_conf=None, sft_path=None,
+                 gradient_checkpointing=False):
         super().__init__()
 
         self.hidden_layer_fineturn = hidden_layer_fineturn
@@ -33,18 +35,8 @@ class LLMModel(torch.nn.Module):
         self.span_weight = span_weight
         self.lora_config = lora_conf
 
-        self.saved_hidden_states = []
-
-        if weight_pooling and span_weight:
-            self.get_span_hidden_states = get_span_hidden_states
-        else:
-            self.get_span_hidden_states = get_span_hidden_states_custom
-
-        config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
-        config.output_hidden_states = load_model_kwargs.pop('output_hidden_states', False)
-        config.output_attentions = load_model_kwargs.pop('output_attentions', False)
-        load_model_kwargs['config'] = config
-        
+        load_model_kwargs = {k: v for k, v in load_model_kwargs.items()
+                             if k not in ('output_hidden_states', 'output_attentions')}
         self.model = AutoModelForCausalLM.from_pretrained(model_name, **load_model_kwargs)
 
         if sft_path is not None:
@@ -64,61 +56,32 @@ class LLMModel(torch.nn.Module):
             self.model = get_peft_model(self.model, lora_config).to(self.model.device)
             self.model.print_trainable_parameters()
 
+        if gradient_checkpointing:
+            self.model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={'use_reentrant': False})
+            if lora_conf is not None:
+                self.model.enable_input_require_grads()
+
         self.device = self.model.device
 
-        self._register_hooks()
-
-    def _register_hooks(self):
-        
-        def save_hidden_states_hook(module, input, output):
-            hidden_state = output[0] if isinstance(output, tuple) else output
-            self.saved_hidden_states.append(hidden_state)
-
-        for name, module in self.model.named_modules():
-            if re.match(r".*\.layers?\.\d+$", name):
-                module.register_forward_hook(save_hidden_states_hook)
-            elif re.match(r".*\.h?\.\d+$", name):
-                module.register_forward_hook(save_hidden_states_hook)
-            
-
+        self.capture = LayerCapture(self.model, hidden_layer_fineturn)
 
     def forward(self, inputs: Dict[str, Tensor] = None):
         safe_idx = inputs.pop('pooler_safe_idx', None)
         pooler_mask = inputs.pop('pooler_mask', None)
         inputs.pop('example_ids', None)
 
-        self.saved_hidden_states.clear()
-        self.saved_hidden_states.append(None)
-
-        outputs = self.model(**inputs, output_attentions=True, return_dict=True, use_cache=False)
+        self.capture.begin(inputs['attention_mask'])
+        outputs = self.model(**inputs, return_dict=True, use_cache=False)
+        self.capture.end()
 
         if not self.training:
-            return StudentOutput(logits=None)
-        
-        if len(self.saved_hidden_states) > 0:
-            hidden_states = tuple(self.saved_hidden_states)
-        else:
-            hidden_states = None
-        
-        attentions =  outputs.attentions
-        if attentions is None:
-            attentions = torch.ones((self.model.config.num_hidden_layers,
-                                     inputs['input_ids'].size(0),
-                                     self.model.config.num_attention_heads, 
-                                     inputs['input_ids'].size(1),
-                                     inputs['input_ids'].size(1)), 
-                                     device=inputs['input_ids'].device)
+            return StudentOutput(logits=outputs.logits)
 
-        span_weights = None
-        if safe_idx is not None and hidden_states is not None:
-            hidden_states, span_weights = self.get_span_hidden_states(inputs, hidden_states, 
-                                                                      attentions, safe_idx, 
-                                                                      pooler_mask, inputs['attention_mask'],
-                                                                      self.hidden_layer_fineturn,
-                                                                      self.weight_pooling, self.span_weight, 
-                                                                      is_causal=True)
-            
-        self.saved_hidden_states.clear() 
+        hidden_states, span_weights = None, None
+        if safe_idx is not None:
+            hidden_states, span_weights = get_span_hidden_states(
+                self.capture.hidden_states(), self.capture.rows, safe_idx, pooler_mask,
+                self.hidden_layer_fineturn, self.weight_pooling, self.span_weight)
 
         return StudentOutput(
             logits=outputs.logits,
@@ -126,14 +89,23 @@ class LLMModel(torch.nn.Module):
             span_weights=span_weights
         )
 
+    def lm_head_parameters(self):
+        """(weight, bias) of the output projection, also through a PEFT wrapper."""
+        head = self.model.get_output_embeddings()
+        return head.weight, getattr(head, 'bias', None)
+
     def save(self, output_dir: str):
-        self.model.save_pretrained(output_dir, state_dict=self.model.state_dict())
-    
+        """Save an HF checkpoint (bf16). LoRA is merged into the base weights, which ends its training."""
+        model = self.model
+        if isinstance(model, PeftModel):
+            model = model.merge_and_unload()
+        model.to(torch.bfloat16).save_pretrained(output_dir, safe_serialization=True)
+
     def get_config(self):
         return self.model.config
-    
+
 class StudentCausalModel(torch.nn.Module):
-    def __init__(self, model:LLMModel, model_path, n_encoder_finetuned, 
+    def __init__(self, model:LLMModel, model_path, n_encoder_finetuned,
                  teacher_hidden_size=-1, finetune_embedding=False, orthogonal=True):
         super().__init__()
         self.model = model
@@ -141,8 +113,6 @@ class StudentCausalModel(torch.nn.Module):
         trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
         total_params = sum(p.numel() for p in self.model.parameters())
 
-        print('model output_attentions:', model.get_config().output_attentions)
-        print('model output_attentions:', model.get_config().output_hidden_states)
         print(f"Trainable parameters: {trainable_params:,}")
         print(f"Total parameters: {total_params:,}")
         print(f"Percentage trainable: {100 * trainable_params / total_params:.2f}%")
@@ -160,7 +130,7 @@ class StudentCausalModel(torch.nn.Module):
                 else:
                     nn.init.xavier_uniform_(W)
                 proj_list.append(W)
-            
+
             self.proj_hidden_layers = nn.ParameterList(proj_list)
 
             self.proj_embeddings = nn.Parameter(torch.empty(self.model.get_config().hidden_size, teacher_hidden_size))
@@ -172,7 +142,7 @@ class StudentCausalModel(torch.nn.Module):
             hidden_weight_path = os.path.join(model_path, 'proj_hidden_layers.pt')
             if os.path.exists(hidden_weight_path):
                 self.proj_hidden_layers = torch.load(hidden_weight_path, weights_only=False)
-            
+
             if os.path.exists(os.path.join(model_path, 'proj_embeddings.pt')):
                 self.proj_embeddings = torch.load(os.path.join(model_path, 'proj_embeddings.pt'),
                                                   weights_only=False)
@@ -186,19 +156,16 @@ class StudentCausalModel(torch.nn.Module):
         outputs = self.model(inputs)
 
         if outputs.hidden_states is not None and self.proj_hidden_layers is not None:
-            hidden_states = []
             outputs.embeddings = outputs.hidden_states[-1]
-            for i, proj_layer in enumerate(self.proj_hidden_layers):
-                hidden_states.append(outputs.hidden_states[i] @ proj_layer)
-                
-            outputs.hidden_states = hidden_states
+            outputs.hidden_states = torch.stack([outputs.hidden_states[i] @ proj_layer
+                                                 for i, proj_layer in enumerate(self.proj_hidden_layers)])
 
         return outputs
 
     def save(self, path: str):
+        """HF checkpoint in `path`; the KD projections go to `path/kd`, outside what eval loads."""
         self.model.save(path)
         if self.proj_hidden_layers is not None:
-            torch.save(self.proj_hidden_layers, os.path.join(path, 'proj_hidden_layers.pt'))
-
-        if self.proj_embeddings is not None:
-            torch.save(self.proj_embeddings, os.path.join(path, 'proj_embeddings.pt'))
+            os.makedirs(os.path.join(path, 'kd'), exist_ok=True)
+            torch.save(self.proj_hidden_layers, os.path.join(path, 'kd', 'proj_hidden_layers.pt'))
+            torch.save(self.proj_embeddings, os.path.join(path, 'kd', 'proj_embeddings.pt'))

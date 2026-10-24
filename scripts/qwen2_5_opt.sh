@@ -50,8 +50,7 @@ OPTS+=" --teacher_tokenizer Qwen/Qwen2.5-7B-Instruct"
 OPTS+=" --student_model facebook/opt-2.7b"
 OPTS+=" --student_tokenizer facebook/opt-2.7b"
 
-# hf token
-OPTS+=" --hf_token hf_***"
+# the Hugging Face token is read from the HF_TOKEN environment variable
 
 # extra arguments
 OPTS+=" --seed ${SEED}"

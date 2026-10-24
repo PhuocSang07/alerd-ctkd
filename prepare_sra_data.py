@@ -20,6 +20,8 @@ import json
 import statistics
 from pathlib import Path
 
+from allocation import last_boxed
+
 
 def load_rows(dataset, split):
     from datasets import load_dataset
@@ -33,9 +35,7 @@ def load_rows(dataset, split):
 
 
 def filter_rows(rows):
-    """Keep rows whose attempt ends in an extractable \boxed{} and shape them for sgl.data.prepare."""
-    from sgl.data.s1k import last_boxed
-
+    """Keep rows whose attempt ends in an extractable boxed answer and shape them for sgl.data.prepare."""
     kept, empty_attempt, no_boxed, kept_grade_no = [], 0, 0, 0
     for row in rows:
         attempt = (row.get("deepseek_attempt") or "").strip()

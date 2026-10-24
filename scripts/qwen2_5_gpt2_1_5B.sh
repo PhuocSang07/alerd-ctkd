@@ -51,8 +51,7 @@ OPTS+=" --teacher_tokenizer Qwen/Qwen2.5-7B-Instruct"
 OPTS+=" --student_model openai-community/gpt2-xl"
 OPTS+=" --student_tokenizer openai-community/gpt2-xl"
 
-# hf token
-OPTS+=" --hf_token hf_***"
+# the Hugging Face token is read from the HF_TOKEN environment variable
 
 # extra arguments
 OPTS+=" --seed ${SEED}"

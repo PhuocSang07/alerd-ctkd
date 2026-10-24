@@ -51,8 +51,7 @@ OPTS+=" --teacher_tokenizer mistralai/Mistral-7B-v0.1"
 OPTS+=" --student_model TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T"
 OPTS+=" --student_tokenizer TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T"
 
-# hf token
-OPTS+=" --hf_token hf_***"
+# the Hugging Face token is read from the HF_TOKEN environment variable
 
 # extra arguments
 OPTS+=" --seed ${SEED}"

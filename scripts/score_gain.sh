@@ -1,5 +1,5 @@
 #!/bin/bash
-# Per-student data preparation and answer-gain scoring (needs a GPU with vLLM; not meant for a laptop).
+# Per-student data preparation, answer-gain and predictability scoring (needs a GPU with vLLM; not meant for a laptop).
 # Usage: SGL_SRC=/path/to/SpectralGuidedLearning/src bash scripts/score_gain.sh [WORK_DIR] [MAX_TOKENS]
 # Authentication for gated models comes from the HF_TOKEN environment variable, never from this script.
 set -euo pipefail
@@ -27,6 +27,8 @@ for student in "${STUDENTS[@]}"; do
     --output-path "${out}/train-segmented.jsonl"
   python -m sgl.signals.answer_gain --data-path "${out}/train-segmented.jsonl" --model "${student}" \
     --output "${out}/gain.json"
+  python score_predictability.py --data "${out}/train-segmented.jsonl" --model "${student}" \
+    --output "${out}/predictability.json"
   python prepare_sra_data.py convert --segmented "${out}/train-segmented.jsonl" \
     --student-tokenizer "${student}" --output "${out}/train-sra.jsonl"
 done

@@ -12,6 +12,23 @@ NORMALIZATIONS = ("per-trace", "corpus", "none")
 SCORE_SOURCES = ("gain", "random", "predictability-easy", "predictability-hard", "answer-only-unit")
 
 
+def last_boxed(text):
+    """Content of the last \\boxed{...}, brace-matched (same rule as sgl.data.s1k.last_boxed)."""
+    index = text.rfind("\\boxed{")
+    if index == -1:
+        return None
+    start = index + len("\\boxed{")
+    depth = 1
+    for position in range(start, len(text)):
+        if text[position] == "{":
+            depth += 1
+        elif text[position] == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:position].strip()
+    return None
+
+
 def exp_scores(scores, tau=1.0, clip=2.0, eps=1e-8):
     """Eq. 3: r_k = exp(clip(standardise(score), -c, c) / tau); uniform when the trace has no spread."""
     if tau <= 0:
@@ -32,8 +49,9 @@ def exp_scores(scores, tau=1.0, clip=2.0, eps=1e-8):
 
 
 def _check_masses(masses):
-    if any(m <= 0 for m in masses):
-        raise ValueError("step span counts must be positive")
+    """A step may hold no span (zero mass); the trace must still hold at least one."""
+    if any(m < 0 for m in masses) or sum(masses) <= 0:
+        raise ValueError("step span counts must be non-negative with a positive total")
 
 
 def trace_weights(scores, masses, tau=1.0, lam=0.5, clip=2.0, eps=1e-8, normalization="per-trace",

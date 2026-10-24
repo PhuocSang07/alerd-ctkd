@@ -5,57 +5,20 @@ import sys
 
 import pytest
 import torch
-from tokenizers import Tokenizer, decoders, models, normalizers, pre_tokenizers, trainers
-from transformers import PreTrainedTokenizerFast
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from helpers import make_rows, make_text, train_tokenizer  # noqa: E402
 from data_utils import LLMDataCollator, LLMDataset  # noqa: E402
 from prepare_sra_data import step_char_ends  # noqa: E402
-from span_index import build_rows, sample_spans, span_row  # noqa: E402
-
-WORDS = ("let triangle area hexagon find value sum answer therefore thus given right side length equals "
-         "square root frac boxed we need to compute the number of ways 12 15 20 25 240 120 x y z").split()
-
-
-def make_text(rng, sentences):
-    return " ".join(
-        " ".join(rng.choice(WORDS) for _ in range(rng.randint(4, 12))).capitalize() + rng.choice([".", ".", "?"])
-        for _ in range(sentences))
-
-
-def train_tokenizer(kind, corpus):
-    if kind == "bpe":
-        tok = Tokenizer(models.BPE())
-        tok.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
-        tok.decoder = decoders.ByteLevel()
-        trainer = trainers.BpeTrainer(vocab_size=330, special_tokens=["<pad>"],
-                                      initial_alphabet=pre_tokenizers.ByteLevel.alphabet())
-    else:
-        tok = Tokenizer(models.WordPiece(unk_token="<unk>"))
-        tok.normalizer = normalizers.Lowercase()
-        tok.pre_tokenizer = pre_tokenizers.Whitespace()
-        trainer = trainers.WordPieceTrainer(vocab_size=120, special_tokens=["<pad>", "<unk>"])
-    tok.train_from_iterator(corpus, trainer)
-    fast = PreTrainedTokenizerFast(tokenizer_object=tok, pad_token="<pad>", unk_token="<unk>" if kind != "bpe" else None)
-    fast.padding_side = "right"
-    return fast
-
+from span_index import build_rows, sample_spans, span_row, truncation_flags  # noqa: E402
 
 @pytest.fixture(scope="module")
 def setup(tmp_path_factory):
     rng = random.Random(0)
     corpus = [make_text(rng, 6) for _ in range(200)]
     student, teacher = train_tokenizer("bpe", corpus), train_tokenizer("wordpiece", corpus)
-    rows = []
-    for i in range(6):
-        prompt = make_text(rng, 2) + "\n"
-        sentences = [make_text(rng, 1) for _ in range(rng.randint(2, 6))]
-        output, ends, pos = "", [], 0
-        for s in sentences:
-            output += s + " "
-            ends.append(len(output))
-        rows.append({"id": i, "prompt": prompt, "output": output, "step_char_ends": ends})
+    rows = make_rows(rng, 6)
     path = tmp_path_factory.mktemp("data") / "train.jsonl"
     path.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
     dataset = LLMDataset(str(path), student, teacher, prompt_max_len=64)
@@ -157,3 +120,11 @@ def test_step_char_ends_follow_student_offsets(setup):
     record = {"id": 0, "response": example["output"], "input_ids": [1, 2] + ids, "response_token_span": [2, 2 + len(ids)],
               "steps": [{"token_start": 2, "token_end": 2 + len(ids)}]}
     assert step_char_ends(student, record) == [len(example["output"])]
+
+
+def test_truncation_flags_report_samples_that_lose_the_boxed_answer(setup):
+    student, teacher, dataset = setup
+    example = dict(dataset.dataset[0])
+    example["output"] = example["output"] + " so the answer is \\boxed{7}."
+    assert truncation_flags(example, student, teacher, 256) == (False, False)
+    assert truncation_flags(example, student, teacher, 30) == (True, True)

@@ -1,8 +1,8 @@
 from torch.nn.functional import pad
 from torch.utils.data import Dataset
 import numpy as np
-import pandas as pd
 import torch
+import hashlib
 import json
 from transformers import PreTrainedTokenizer
 
@@ -131,7 +131,9 @@ def prepare_pooler_v2(student_starts, student_offset_mapping, student_lengths,
 
 
 class LLMDataset(Dataset):
-    def __init__(self, file_path, student_tokenizer, teacher_tokenizer, prompt_max_len=512):
+    """jsonl rows {prompt, output[, id, step_char_ends]}; prompts are cut to prompt_max_len tokens when it is set."""
+
+    def __init__(self, file_path, student_tokenizer, teacher_tokenizer, prompt_max_len=None):
 
         self.dataset = []
 
@@ -140,12 +142,15 @@ class LLMDataset(Dataset):
                 data = json.loads(line)
                 self.dataset.append(data)
 
+                # the chat-templated prompt already carries the student's special tokens
                 s_prompt = student_tokenizer(
-                    data['prompt'], 
+                    data['prompt'],
                     max_length=prompt_max_len,
-                    truncation=True
+                    truncation=prompt_max_len is not None,
+                    add_special_tokens=False
                 )
-                data['prompt'] = student_tokenizer.decode(s_prompt['input_ids'])
+                if prompt_max_len is not None and len(s_prompt['input_ids']) >= prompt_max_len:
+                    data['prompt'] = student_tokenizer.decode(s_prompt['input_ids'])
                 data['s_prompt_len'] = len(s_prompt['input_ids'])
 
                 t_prompt = teacher_tokenizer(data['prompt'])
@@ -156,8 +161,9 @@ class LLMDataset(Dataset):
         return len(self.dataset)
 
     def __getitem__(self, index):
-        return (self.dataset[index]['prompt'], self.dataset[index]['output'], 
-                self.dataset[index]['s_prompt_len'], self.dataset[index]['t_prompt_len'], index)
+        data = self.dataset[index]
+        return (data['prompt'], data['output'], data['s_prompt_len'], data['t_prompt_len'],
+                data.get('id', index))
     
 
 @dataclass
@@ -171,6 +177,7 @@ class LLMDataCollator:
     padding: bool = True
     return_offsets_mapping: bool = True
     max_spans: int = None
+    span_provider: object = None  # span_weights.SpanWeightProvider
 
     def __post_init__(self):
         # Span indices start at the prompt length, which only holds with right padding.
@@ -191,10 +198,12 @@ class LLMDataCollator:
         
         student_inputs = self.student_tokenizer(
             fulls,
+            add_special_tokens=False,  # the chat template supplies them, as in sgl's training and evaluation
             truncation=True,
             padding=self.padding,
             max_length=self.max_len,
             return_tensors=self.return_tensors,
+            return_token_type_ids=False,
             pad_to_multiple_of=self.pad_to_multiple_of,
             return_offsets_mapping=self.return_offsets_mapping and self.do_train,
         )
@@ -207,15 +216,19 @@ class LLMDataCollator:
         #     return_tensors=self.return_tensors,
         # )
         
-        labels = student_inputs["input_ids"].clone().detach()
+        # labels[:, 1:] align with the logits: response tokens, then one EOS at the first position past the text
+        # (an extra column makes room when a sample fills the batch). Prompt and padding are masked.
+        input_ids = student_inputs["input_ids"]
         input_lengths = student_inputs["attention_mask"].sum(dim=1)
-        # labels[labels == self.student_tokenizer.pad_token_id] = -100
-        # prompt_lengths = tokenized_prompts["attention_mask"].sum(dim=1)
-        prompt_lengths = torch.tensor(prompt_lengths)
-
+        labels = torch.cat([input_ids.clone(), torch.full_like(input_ids[:, :1], -100)], dim=1)
+        eos_id = self.student_tokenizer.eos_token_id
         for i in range(len(labels)):
             labels[i, :prompt_lengths[i]] = -100
-            labels[i, (input_lengths[i] + 1):] = -100
+            labels[i, input_lengths[i]:] = -100
+            if eos_id is not None and input_lengths[i] < self.max_len:
+                labels[i, input_lengths[i]] = eos_id
+
+        prompt_lengths = torch.tensor(prompt_lengths)
 
         if not self.do_train:
             return student_inputs, None, labels
@@ -230,6 +243,7 @@ class LLMDataCollator:
             padding=self.padding,
             max_length=self.max_len,
             return_tensors=self.return_tensors,
+            return_token_type_ids=False,
             pad_to_multiple_of=self.pad_to_multiple_of,
             return_offsets_mapping=self.return_offsets_mapping,
         )
@@ -255,6 +269,12 @@ class LLMDataCollator:
             student_inputs['pooler_mask'] = student_pooler_tensor['mask']
             teacher_inputs['pooler_safe_idx'] = teacher_pooler_tensor['safe_idx']
             teacher_inputs['pooler_mask'] = teacher_pooler_tensor['mask']
+
+            if self.span_provider is not None:
+                n_spans = student_pooler_tensor['mask'].any(dim=-1).sum(dim=1).tolist()
+                hashes = [hashlib.sha1(full.encode('utf-8')).hexdigest() for full in fulls]
+                student_inputs['span_weights_alloc'] = self.span_provider.batch_weights(
+                    example_ids, hashes, n_spans, student_pooler_tensor['mask'].size(1))
 
         return student_inputs, teacher_inputs, labels
 

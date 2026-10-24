@@ -6,7 +6,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from allocation import (corpus_weights, span_weights, step_weights_for_source,  # noqa: E402
+from allocation import (corpus_weights, last_boxed, span_weights, step_weights_for_source,  # noqa: E402
                         trace_weights)
 
 TOY_GAINS = [-0.69, 0.00, 2.30]
@@ -77,3 +77,9 @@ def test_rejects_bad_inputs():
         trace_weights([0.1], [0])
     with pytest.raises(ValueError):
         trace_weights([0.1], [1], lam=1.5)
+
+
+def test_last_boxed_matches_braces_and_takes_the_last_one():
+    assert last_boxed("a \\boxed{1} b \\boxed{\\frac{3}{4}} c") == "\\frac{3}{4}"
+    assert last_boxed("no answer here") is None
+    assert last_boxed("unclosed \\boxed{12") is None
