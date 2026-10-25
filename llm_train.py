@@ -74,14 +74,19 @@ class Trainer:
         self.hidden_loss_weights = [w / sum(hidden_loss_weights) for w in hidden_loss_weights]
 
         self.span_provider = None
-        if args.span_weight_source != 'attention':
+        if teacher_model is not None and args.span_weight_source != 'attention':
             self.span_provider = SpanWeightProvider(
-                args.span_weight_source, args.spans_file, args.train_data, gain_file=args.gain_file,
+                args.span_weight_source, args.spans_file, args.train_data,
+                student_gain_file=args.student_gain_file, teacher_gain_file=args.teacher_gain_file,
+                gain_source=args.gain_source, gain_unit=args.gain_unit,
                 predictability_file=args.predictability_file, tau=args.alloc_tau, clip=args.alloc_clip,
                 lam=args.alloc_lambda, normalization=args.alloc_norm, answer_only_unit=args.answer_only_unit,
                 seed=args.seed)
 
         self.train_loader, self.val_loader, self.test_loader = self.get_data_loader(args, student_model_type, teacher_model_type)
+
+        if self.teacher_model is None:  # plain fine-tuning: no shared vocabulary to map
+            return
 
         self.s_id_mapping, self.t_id_mapping = get_token_mapping(self.student_tokenizer,
                                                                  self.teacher_tokenizer,
@@ -96,8 +101,10 @@ class Trainer:
     def get_data_loader(self, args: Arguments, student_model_type: str, teacher_model_type: str):
         self.student_tokenizer = load_tokenizer(student_model_type, args.student_tokenizer,
                                                 args.load_student_tokenizer_kwargs)
-        self.teacher_tokenizer = load_tokenizer(teacher_model_type, args.teacher_tokenizer,
-                                                args.load_teacher_tokenizer_kwargs)
+        self.teacher_tokenizer = None
+        if self.teacher_model is not None:
+            self.teacher_tokenizer = load_tokenizer(teacher_model_type, args.teacher_tokenizer,
+                                                    args.load_teacher_tokenizer_kwargs)
 
         train_dataset = LLMDataset(args.train_data, self.student_tokenizer, self.teacher_tokenizer)
 
@@ -237,7 +244,7 @@ def train(args: Arguments, trainer: Trainer, grad_accum_steps=None):
         for batch in p_bar:
             student_inputs, teacher_inputs, labels = batch
 
-            teacher_outputs = trainer.get_teacher_eval(teacher_inputs)
+            teacher_outputs = None if teacher_inputs is None else trainer.get_teacher_eval(teacher_inputs)
 
             labels = labels.to(device)
             with torch.autocast(device_type=device.type, dtype=torch.bfloat16):

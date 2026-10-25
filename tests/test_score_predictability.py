@@ -23,7 +23,7 @@ def tiny_model(tmp_path):
 def test_step_mean_logprobs_scores_each_token_given_its_prefix(tmp_path):
     model = tiny_model(tmp_path)
     ids = [3, 8, 9, 4, 7, 1, 2, 6]
-    record = {"id": 5, "input_ids": ids, "steps": [{"token_start": 3, "token_end": 5}, {"token_start": 5, "token_end": 8}]}
+    record = {"id": 5, "input_ids": ids, "line_steps": [{"token_start": 3, "token_end": 5}, {"token_start": 5, "token_end": 8}]}
     got = step_mean_logprobs(model, record)
     with torch.no_grad():
         logp = torch.log_softmax(model(torch.tensor([ids])).logits[0], dim=-1)
@@ -33,7 +33,7 @@ def test_step_mean_logprobs_scores_each_token_given_its_prefix(tmp_path):
 
 def test_cli_writes_a_score_per_step_keyed_by_id(tmp_path):
     tiny_model(tmp_path)
-    records = [{"id": i, "input_ids": list(range(1, 11)), "steps": [{"token_start": 4, "token_end": 7},
+    records = [{"id": i, "input_ids": list(range(1, 11)), "line_steps": [{"token_start": 4, "token_end": 7},
                                                                     {"token_start": 7, "token_end": 10}]}
                for i in (2, 9)]
     data = tmp_path / "seg.jsonl"

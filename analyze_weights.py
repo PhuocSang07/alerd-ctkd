@@ -14,14 +14,18 @@ import argparse
 import html
 import json
 import random
+import re
 import statistics
 from pathlib import Path
 
 import numpy as np
 
-from allocation import last_boxed
+from allocation import contains_answer, last_boxed
 
 NULL_DRAWS = 2000
+SPAN_TYPES = ("number", "operator", "connector", "word", "final answer")
+CONNECTORS = {"so", "then", "therefore", "thus", "and", "but", "because", "since", "if", "now", "total", "altogether",
+              "each", "of", "per", "in", "for", "after", "before", "more", "less", "than", "from", "with"}
 
 
 def ranks(values):
@@ -74,7 +78,7 @@ def answer_step(example):
     if not answer:
         return None
     starts = [0] + example["step_char_ends"][:-1]
-    hits = [k for k, (a, b) in enumerate(zip(starts, example["step_char_ends"])) if answer in example["output"][a:b]]
+    hits = [k for k, (a, b) in enumerate(zip(starts, example["step_char_ends"])) if contains_answer(example["output"][a:b], answer)]
     return hits[-1] if hits else None
 
 
@@ -94,11 +98,62 @@ def concentration(rows, spans, examples, key):
             "answer_step": statistics.fmean(answer) if answer else None}
 
 
-def example_html(example, span_row, row):
-    """Spans of one example as two coloured rows: SRA attention and omega, shading = rank within the example."""
+def span_pieces(example, span_row):
+    """Text of each span of one example."""
     text = example["prompt"] + example["output"]
     ends = [len(example["prompt"])] + span_row["char_ends"]
-    pieces = [html.escape(text[a:b]) for a, b in zip(ends, ends[1:])]
+    return [text[a:b] for a, b in zip(ends, ends[1:])]
+
+
+def span_type(piece, in_final_step):
+    """number (has a digit) | operator (symbols only) | connector (small closed word list) | word; the final-answer
+    sentence is its own type."""
+    if in_final_step:
+        return "final answer"
+    if re.search(r"\d", piece):
+        return "number"
+    word = piece.strip().lower().strip(".,:;!?")
+    if word and not re.search(r"[A-Za-z]", word):
+        return "operator"
+    return "connector" if word in CONNECTORS else "word"
+
+
+def span_types(example, span_row):
+    last_step = len(example["step_char_ends"]) - 1
+    return [span_type(piece, step == last_step) for piece, step in zip(span_pieces(example, span_row),
+                                                                       span_row["step_of_span"])]
+
+
+def type_profile(items):
+    """items: [(types, weights)] per example, weights summing to 1. Returns {type: (share of spans, relative weight)}:
+    the relative weight is the mean of N * weight over the spans of that type, 1 meaning uniform."""
+    counts = {t: 0 for t in SPAN_TYPES}
+    relative = {t: 0.0 for t in SPAN_TYPES}
+    total = 0
+    for types, weights in items:
+        n = len(types)
+        total += n
+        for t, w in zip(types, weights):
+            counts[t] += 1
+            relative[t] += n * w
+    return {t: (counts[t] / total, relative[t] / counts[t] if counts[t] else None) for t in SPAN_TYPES}
+
+
+def type_table(profiles):
+    """Markdown rows for {name: profile}: share of spans, then the relative weight of each weight source."""
+    names = list(profiles)
+    lines = ["| Span type | Share of spans | " + " | ".join(f"{n} (x uniform)" for n in names) + " |",
+             "|---|---|" + "---|" * len(names)]
+    first = profiles[names[0]]
+    for t in SPAN_TYPES:
+        cells = ["n/a" if profiles[n][t][1] is None else f"{profiles[n][t][1]:.2f}" for n in names]
+        lines.append(f"| {t} | {100 * first[t][0]:.1f}% | " + " | ".join(cells) + " |")
+    return lines
+
+
+def example_html(example, span_row, row):
+    """Spans of one example as two coloured rows: SRA attention and omega, shading = rank within the example."""
+    pieces = [html.escape(piece) for piece in span_pieces(example, span_row)]
 
     def line(title, weights):
         shade = ranks(weights) / max(1, len(weights) - 1)
@@ -119,6 +174,9 @@ def build_report(dump, spans, examples, seed=0):
         raise ValueError("the dump has no examples with omega; train with a non-attention span_weight_source")
     corr = correlation_summary(rows, seed)
     att, omg = (concentration(rows, spans, examples, k) for k in ("attention", "omega"))
+    typed = [(span_types(examples[r["id"]], spans[r["id"]]), r) for r in rows]
+    profiles = {"SRA attention": type_profile([(t, r["attention"]) for t, r in typed]),
+                "ALERD omega": type_profile([(t, r["omega"]) for t, r in typed])}
     fmt = lambda x: "n/a" if x is None else f"{100 * x:.1f}%"  # noqa: E731
     return "\n".join([
         "# ALERD omega versus SRA attention", "",
@@ -131,7 +189,9 @@ def build_report(dump, spans, examples, seed=0):
         "## Where the weight goes (mean share of an example's weight)", "",
         "| Weight | First span | Top 10% of spans | Step stating the answer |", "|---|---|---|---|",
         f"| SRA attention | {fmt(att['first_span'])} | {fmt(att['top10'])} | {fmt(att['answer_step'])} |",
-        f"| ALERD omega | {fmt(omg['first_span'])} | {fmt(omg['top10'])} | {fmt(omg['answer_step'])} |", ""]), rows
+        f"| ALERD omega | {fmt(omg['first_span'])} | {fmt(omg['top10'])} | {fmt(omg['answer_step'])} |", "",
+        "## Weight by span type (mean of N x weight over the spans of the type; 1.00 = uniform)", "",
+        *type_table(profiles), ""]), rows
 
 
 def main(argv=None):

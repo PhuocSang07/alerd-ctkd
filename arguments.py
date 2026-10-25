@@ -23,7 +23,7 @@ class Arguments:
 
 
     max_len: int = field(
-        default=2500,
+        default=512,
         metadata={
             "help": "The maximum total input sequence length after tokenization for passage. Sequences longer "
                     "than this will be truncated, sequences shorter will be padded."
@@ -53,8 +53,8 @@ class Arguments:
     geom_loss_weight: float = field(default=50)
     hard_label_loss_weight: float = field(default=1.0)
 
-    teacher_layers_mapping: List[int] = field(default=list)
-    student_encoder_layers_finetuned: List[int] = field(default=list)
+    teacher_layers_mapping: List[int] = field(default_factory=list)
+    student_encoder_layers_finetuned: List[int] = field(default_factory=list)
     n_encoder_finetuned: int = field(default=6)
     finetune_embedding: bool = field(default=False)
 
@@ -87,7 +87,7 @@ class Arguments:
     lora_dropout: float = field(default=0.05)
     student_dtype: str = field(default='float32', metadata={"help": "float32 master weights (full fine-tuning) or bfloat16 base for LoRA"})
     teacher_dtype: str = field(default='bfloat16')
-    gradient_checkpointing: bool = field(default=True)
+    gradient_checkpointing: bool = field(default=False)
     seed: int = field(default=42)
 
     # span weights of the KD losses
@@ -95,7 +95,10 @@ class Arguments:
         default='attention',
         metadata={"help": "attention (SRA) | uniform | alerd | random | predictability-easy | predictability-hard"})
     spans_file: str = field(default=None, metadata={"help": "spans.jsonl from span_index.py (needed unless source=attention)"})
-    gain_file: str = field(default=None, metadata={"help": "answer-gain json from sgl.signals.answer_gain"})
+    gain_source: str = field(default='student', metadata={"help": "student | teacher | diff (teacher - student span gains)"})
+    gain_unit: str = field(default='span', metadata={"help": "span (gain of each span) | step (spans inherit the gain of their step)"})
+    student_gain_file: str = field(default=None, metadata={"help": "gain-tokens json of the frozen student (token_gain.py pack)"})
+    teacher_gain_file: str = field(default=None, metadata={"help": "gain-tokens json of the teacher (token_gain.py pack)"})
     predictability_file: str = field(default=None, metadata={"help": "per-step mean log-prob json from score_predictability.py"})
     alloc_tau: float = field(default=1.0)
     alloc_clip: float = field(default=2.0)
@@ -107,6 +110,11 @@ class Arguments:
     load_student_tokenizer_kwargs: dict = field(default_factory=dict)
     load_teacher_tokenizer_kwargs: dict = field(default_factory=dict)
 
+    @property
+    def sft_only(self):
+        """hard_label_loss_weight 1 leaves no distillation term: the teacher is neither loaded nor run."""
+        return self.hard_label_loss_weight >= 1.0
+
     def __post_init__(self):
         if not os.path.exists(self.train_data):
             raise FileNotFoundError(f"cannot find file: {self.train_data}, please set a true path")
@@ -114,7 +122,11 @@ class Arguments:
         if self.span_weight_source not in ('attention', 'uniform', 'alerd', 'random',
                                            'predictability-easy', 'predictability-hard'):
             raise ValueError(f"unknown span_weight_source {self.span_weight_source!r}")
-        if self.span_weight_source != 'attention' and not self.spans_file:
+        if self.gain_source not in ('student', 'teacher', 'diff'):
+            raise ValueError(f"unknown gain_source {self.gain_source!r}")
+        if self.gain_unit not in ('span', 'step'):
+            raise ValueError(f"unknown gain_unit {self.gain_unit!r}")
+        if not self.sft_only and self.span_weight_source != 'attention' and not self.spans_file:
             raise ValueError("span_weight_source other than 'attention' needs --spans_file")
         if self.alloc_norm not in ('per-trace', 'corpus', 'none'):
             raise ValueError(f"unknown alloc_norm {self.alloc_norm!r}")

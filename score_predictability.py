@@ -1,10 +1,10 @@
 """Mean token log-probability of each step under the frozen student (the "predictability" step score).
 
-    python score_predictability.py --data work/<student>/train-segmented.jsonl --model <student> \\
+    python score_predictability.py --data work/<student>/tokens-<student>.jsonl --model <student> \\
         --output work/<student>/predictability.json
 
-Reads the records of sgl.data.prepare and writes {id: [mean log p of the step's tokens given the prefix]},
-aligned with the steps, in the same layout as the answer-gain json.
+Reads the records of `token_gain.py records` and writes {id: [mean log p of the line's tokens given the prefix]},
+one value per solution line (`line_steps`).
 """
 import argparse
 import json
@@ -17,7 +17,7 @@ def step_mean_logprobs(model, record):
     with torch.no_grad():
         logits = model(ids).logits[0].float()
     logp = torch.log_softmax(logits[:-1], dim=-1).gather(1, ids[0, 1:, None])[:, 0]  # logp[t] scores token t + 1
-    return [logp[step["token_start"] - 1: step["token_end"] - 1].mean().item() for step in record["steps"]]
+    return [logp[step["token_start"] - 1: step["token_end"] - 1].mean().item() for step in record["line_steps"]]
 
 
 def main(argv=None):

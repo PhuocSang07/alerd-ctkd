@@ -73,3 +73,27 @@ def test_cli_writes_report_and_coloured_example(tmp_path):
     assert "ALERD omega versus SRA attention" in (tmp_path / "report.md").read_text(encoding="utf-8")
     page = (tmp_path / "example.html").read_text(encoding="utf-8")
     assert page.count("<span style") == 2 * 20 and "SRA attention" in page and "ALERD omega" in page
+
+
+def test_span_types_follow_digits_symbols_connectors_and_the_final_step():
+    example = {"step_char_ends": [10, 20]}
+    span_row = {"step_of_span": [0, 0, 0, 0, 1, 1]}
+    pieces = ["She sold ", "48", " /", " so", " clips", " 72"]
+    from analyze_weights import span_type, type_profile, type_table
+
+    assert [span_type(p, step == 1) for p, step in zip(pieces, span_row["step_of_span"])] == [
+        "word", "number", "operator", "connector", "final answer", "final answer"]
+    weights = [0.1, 0.4, 0.1, 0.1, 0.2, 0.1]
+    profile = type_profile([(["word", "number", "operator", "connector", "final answer", "final answer"], weights)])
+    assert profile["number"] == (pytest.approx(1 / 6), pytest.approx(6 * 0.4))
+    assert profile["final answer"][1] == pytest.approx(6 * 0.15)
+    assert sum(share for share, _ in profile.values()) == pytest.approx(1.0)
+    table = type_table({"a": profile, "b": profile})
+    assert table[0].startswith("| Span type |") and len(table) == 2 + 5 and "n/a" not in "\n".join(table)
+    assert example and span_row
+
+
+def test_report_lists_the_weight_by_span_type():
+    dump, spans, examples = make_dump()
+    report, _ = build_report(dump, spans, examples)
+    assert "Weight by span type" in report and "| number |" in report and "| final answer |" in report

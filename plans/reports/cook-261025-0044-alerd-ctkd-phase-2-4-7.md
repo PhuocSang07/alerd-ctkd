@@ -1,5 +1,8 @@
 # ALERD-CTKD: phase 2, 4, 5, 6, 7 (phần chạy được trên CPU)
 
+> Đã được thay thế: plan đổi sang GSM8K, GPT2-XL và Llama-3.2-1B-Instruct (2026-10-25). Trạng thái hiện tại nằm trong
+> `cook-261025-1305-alerd-ctkd-gsm8k.md`; báo cáo này chỉ ghi lại lần làm cho s1K.
+
 Phase 1 và 3 nằm trong `cook-261025-0044-alerd-ctkd-phase-1-3.md`. Không sửa file nào trong
 D:\SpectralGuidedLearning; `sgl` chỉ được gọi như thư viện.
 

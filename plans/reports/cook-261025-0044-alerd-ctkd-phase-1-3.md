@@ -1,5 +1,8 @@
 # ALERD-CTKD: phase 1 và phase 3
 
+> Đã được thay thế: plan đổi sang GSM8K, GPT2-XL và Llama-3.2-1B-Instruct (2026-10-25). Trạng thái hiện tại nằm trong
+> `cook-261025-1305-alerd-ctkd-gsm8k.md`; báo cáo này chỉ ghi lại lần làm cho s1K (số trong đó không còn áp dụng).
+
 Branch `feat/alerd-ctkd` trong D:\SRE, chưa commit. Không sửa file nào trong D:\SpectralGuidedLearning.
 Báo cáo này nằm ở D:\SRE\plans\reports vì tin nhắn cập nhật cấm ghi vào repo kia.
 

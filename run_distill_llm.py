@@ -26,7 +26,7 @@ def parse(argv=None):
     args, remaining = hf_parser.parse_args_into_dataclasses(args=argv, return_remaining_strings=True)
 
     args: Arguments = args
-    args.knowledge_distillation = True
+    args.knowledge_distillation = not args.sft_only
     args.finetune_hidden_states = True
     args.finetune_embedding = True
 
@@ -39,6 +39,15 @@ def parse(argv=None):
     return args, extra_parser.parse_args(remaining)
 
 
+def check_model(config, layers, max_len, role):
+    """The sequence must fit the model's context and the distilled layers must exist."""
+    context = getattr(config, 'max_position_embeddings', None)
+    if context is not None and max_len > context:
+        raise ValueError(f"max_len {max_len} exceeds the {role} context of {context} tokens")
+    if any(not 1 <= layer <= config.num_hidden_layers for layer in layers):
+        raise ValueError(f"{role} layers {layers} out of range for a {config.num_hidden_layers}-layer model")
+
+
 def build_trainer(args: Arguments, extras):
     set_seed(args.seed)
 
@@ -46,22 +55,28 @@ def build_trainer(args: Arguments, extras):
     if token:
         login(token)
 
-    load_model_kwargs = {'torch_dtype': getattr(torch, args.teacher_dtype),
-                         'device_map': args.teach_device,
-                         'trust_remote_code': True,
-                         'attn_implementation': 'sdpa',
-                         'token': token}
+    # SRA reads the attention weights of the distilled layers, which only the eager implementation returns
+    attention = 'sdpa' if args.sft_only else 'eager'
 
-    teacher_model = Teacher(model_name=args.teacher_model,
-                            load_model_kwargs=load_model_kwargs,
-                            export_hidden_state_layers=args.teacher_layers_mapping,
-                            weight_pooling=args.span_weight_pooling,
-                            span_weight=args.span_loss_weight,
-                            sft_path=extras.teacher_sft)
+    teacher_model = None
+    if not args.sft_only:
+        load_model_kwargs = {'torch_dtype': getattr(torch, args.teacher_dtype),
+                             'device_map': args.teach_device,
+                             'trust_remote_code': True,
+                             'attn_implementation': attention,
+                             'token': token}
+
+        teacher_model = Teacher(model_name=args.teacher_model,
+                                load_model_kwargs=load_model_kwargs,
+                                export_hidden_state_layers=args.teacher_layers_mapping,
+                                weight_pooling=args.span_weight_pooling,
+                                span_weight=args.span_loss_weight,
+                                sft_path=extras.teacher_sft)
+        check_model(teacher_model.model.config, args.teacher_layers_mapping, args.max_len, 'teacher')
 
     load_student_model_kwargs = {'device_map': args.student_device,
                                  'torch_dtype': getattr(torch, args.student_dtype),
-                                 'attn_implementation': 'sdpa',
+                                 'attn_implementation': attention,
                                  'token': token}
 
     lora_config = None
@@ -77,9 +92,12 @@ def build_trainer(args: Arguments, extras):
                          lora_conf=lora_config, sft_path=extras.student_sft,
                          gradient_checkpointing=args.gradient_checkpointing)
 
+    check_model(llm_model.get_config(), [] if args.sft_only else args.student_encoder_layers_finetuned,
+                args.max_len, 'student')
+
     student_model = StudentCausalModel(llm_model, model_path=args.student_model,
                                        n_encoder_finetuned=args.n_encoder_finetuned,
-                                       teacher_hidden_size=args.teacher_embedding_dimension,
+                                       teacher_hidden_size=-1 if args.sft_only else args.teacher_embedding_dimension,
                                        finetune_embedding=args.finetune_embedding,
                                        orthogonal=args.orthogonal)
 

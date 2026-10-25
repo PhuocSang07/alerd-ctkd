@@ -1,31 +1,33 @@
 """Offline span index: the spans the collator will build at train time, plus the step each one belongs to.
 
     python span_index.py --data work/train-sra.jsonl --student-tokenizer <s> --teacher-tokenizer <t> \\
-        --max-len 4096 --output work/spans.jsonl
+        --max-len 512 --output work/spans.jsonl
 
-One row per sample: id, hash, n_steps, char_ends (student character end of each span, in prompt + output),
+One row per sample: id, hash / teacher_hash (sha1 of the student / teacher text), n_steps, char_ends (student character end of each span, in prompt + output),
 student_tokens / teacher_tokens ([start, end) per span), truncated / boxed_cut (the sample exceeds max_len / loses its final boxed answer),
 step_of_span (step holding the span's last
 character, None without step_char_ends) and crosses_step (the span's first and last character fall in
 different steps). The span computation is sample_span_bounds from data_utils, the function the collator uses.
 """
 import argparse
-import hashlib
 import json
 import statistics
 from bisect import bisect_right
 
-from data_utils import LLMDataset, sample_span_bounds
+from data_utils import LLMDataset, sample_span_bounds, text_hash
 
 
 def sample_spans(example, student_tokenizer, teacher_tokenizer, max_len, max_spans=None):
     """Spans of one example tokenized on its own (no batch padding), as the collator tokenizes it."""
     full = example["prompt"] + example["output"]
+    teacher_prompt = example.get("teacher_prompt", example["prompt"])
     student = student_tokenizer(full, add_special_tokens=False, truncation=True, max_length=max_len,
                                 return_offsets_mapping=True)
-    teacher = teacher_tokenizer(full, truncation=True, max_length=max_len, return_offsets_mapping=True)
+    teacher = teacher_tokenizer(teacher_prompt + example["output"], add_special_tokens=False, truncation=True,
+                                max_length=max_len, return_offsets_mapping=True)
     bounds = sample_span_bounds(student["offset_mapping"], teacher["offset_mapping"],
-                                example["s_prompt_len"], example["t_prompt_len"], max_spans)
+                                example["s_prompt_len"], example["t_prompt_len"], max_spans,
+                                len(example["prompt"]) - len(teacher_prompt))
     return bounds, student["offset_mapping"]
 
 
@@ -39,7 +41,8 @@ def span_row(example, bounds, student_offsets):
     char_ends = [int(student_offsets[bounds[n + 1][0] - 1][1]) for n in range(len(bounds) - 1)]
     row = {
         "id": example.get("id"),
-        "hash": hashlib.sha1((example["prompt"] + example["output"]).encode("utf-8")).hexdigest(),
+        "hash": text_hash(example["prompt"] + example["output"]),
+        "teacher_hash": text_hash(example.get("teacher_prompt", example["prompt"]) + example["output"]),
         "char_ends": char_ends,
         "student_tokens": [[bounds[n][0], bounds[n + 1][0]] for n in range(len(bounds) - 1)],
         "teacher_tokens": [[bounds[n][1], bounds[n + 1][1]] for n in range(len(bounds) - 1)],
@@ -59,13 +62,14 @@ def span_row(example, bounds, student_offsets):
 
 def truncation_flags(example, student_tokenizer, teacher_tokenizer, max_len):
     """(truncated, boxed_cut): the text exceeds max_len tokens for either tokenizer / its last boxed answer is cut off."""
-    full = example["prompt"] + example["output"]
-    boxed_at = full.rfind("\\boxed{")
     truncated = boxed_cut = False
-    for tokenizer, special in ((student_tokenizer, False), (teacher_tokenizer, True)):
-        if len(tokenizer(full, add_special_tokens=special)["input_ids"]) > max_len:
+    for tokenizer, prompt in ((student_tokenizer, example["prompt"]),
+                              (teacher_tokenizer, example.get("teacher_prompt", example["prompt"]))):
+        full = prompt + example["output"]
+        boxed_at = full.rfind("\\boxed{")
+        if len(tokenizer(full, add_special_tokens=False)["input_ids"]) > max_len:
             truncated = True
-            kept = tokenizer(full, add_special_tokens=special, truncation=True, max_length=max_len,
+            kept = tokenizer(full, add_special_tokens=False, truncation=True, max_length=max_len,
                              return_offsets_mapping=True)["offset_mapping"]
             boxed_cut |= boxed_at >= 0 and boxed_at + len("\\boxed{") > kept[-1][1]
     return truncated, boxed_cut
@@ -92,7 +96,7 @@ def main(argv=None):
     parser.add_argument("--data", required=True, help="SRA jsonl from prepare_sra_data.py convert")
     parser.add_argument("--student-tokenizer", required=True)
     parser.add_argument("--teacher-tokenizer", required=True)
-    parser.add_argument("--max-len", type=int, default=4096)
+    parser.add_argument("--max-len", type=int, default=512)
     parser.add_argument("--max-spans", type=int, default=None, help="cap on spans per sample; default keeps all")
     parser.add_argument("--output", required=True)
     args = parser.parse_args(argv)
@@ -102,7 +106,7 @@ def main(argv=None):
     student = AutoTokenizer.from_pretrained(args.student_tokenizer, trust_remote_code=True)
     teacher = AutoTokenizer.from_pretrained(args.teacher_tokenizer, trust_remote_code=True)
     print(f"padding_side student={student.padding_side} teacher={teacher.padding_side}")
-    dataset = LLMDataset(args.data, student, teacher, args.max_len // 2)
+    dataset = LLMDataset(args.data, student, teacher)
     rows = build_rows(dataset, student, teacher, args.max_len, args.max_spans)
     with open(args.output, "w", encoding="utf-8") as handle:
         for row in rows:

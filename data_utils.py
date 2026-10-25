@@ -92,29 +92,34 @@ def get_pooler_tensor(segments_idxs):
 
     return {'safe_idx': safe_idx, 'mask': mask}
 
-def sample_span_bounds(student_offset, teacher_offset, student_start, teacher_start, max_spans=None):
+def sample_span_bounds(student_offset, teacher_offset, student_start, teacher_start, max_spans=None,
+                       teacher_shift=0):
     """Token boundaries (student_idx, teacher_idx) of the aligned spans of one sample.
 
     The offsets must cover the sample's real tokens only (no padding), so the result does not depend on
     how the sample was batched. The first pair is the response start; span n covers tokens
     [bounds[n][0], bounds[n+1][0]) on the student side and [bounds[n][1], bounds[n+1][1]) on the teacher side.
+    teacher_shift (student prompt characters minus teacher prompt characters) moves the teacher's character offsets
+    into the student's coordinates when the two models wrap the same output in prompts of different lengths.
     """
     student_offset = np.asarray(student_offset)
-    teacher_offset = np.asarray(teacher_offset)
+    teacher_offset = np.array(teacher_offset)
+    teacher_offset[int(teacher_start):] += teacher_shift
     return [(int(student_start), int(teacher_start))] + longest_common_subsequence(
         student_offset, teacher_offset, int(student_start), int(teacher_start), max_spans)
 
 
 def prepare_pooler_v2(student_starts, student_offset_mapping, student_lengths,
-                      teacher_starts, teacher_offset_mapping, teacher_lengths, max_spans=None):
+                      teacher_starts, teacher_offset_mapping, teacher_lengths, max_spans=None, teacher_shifts=None):
     student_seg_idxs, teacher_seg_idxs = [], []
-    for student_start, student_offset, student_len, teacher_start, teacher_offset, teacher_len in zip(
+    teacher_shifts = teacher_shifts if teacher_shifts is not None else [0] * len(student_starts)
+    for student_start, student_offset, student_len, teacher_start, teacher_offset, teacher_len, shift in zip(
             student_starts, student_offset_mapping, student_lengths,
-            teacher_starts, teacher_offset_mapping, teacher_lengths):
+            teacher_starts, teacher_offset_mapping, teacher_lengths, teacher_shifts):
 
         bounds = sample_span_bounds(student_offset[:int(student_len)].numpy(),
                                     teacher_offset[:int(teacher_len)].numpy(),
-                                    student_start.item(), teacher_start.item(), max_spans)
+                                    student_start.item(), teacher_start.item(), max_spans, shift)
         student_seg_idx, teacher_seg_idx = [], []
         student_max_len, teacher_max_len = 1, 1
 
@@ -130,10 +135,18 @@ def prepare_pooler_v2(student_starts, student_offset_mapping, student_lengths,
     return get_pooler_tensor(student_seg_idxs), get_pooler_tensor(teacher_seg_idxs)
 
 
-class LLMDataset(Dataset):
-    """jsonl rows {prompt, output[, id, step_char_ends]}; prompts are cut to prompt_max_len tokens when it is set."""
+def text_hash(text):
+    return hashlib.sha1(text.encode('utf-8')).hexdigest()
 
-    def __init__(self, file_path, student_tokenizer, teacher_tokenizer, prompt_max_len=None):
+
+class LLMDataset(Dataset):
+    """jsonl rows {prompt, output[, teacher_prompt, id, step_char_ends]}.
+
+    `teacher_prompt` (default: `prompt`) is the prompt in the teacher's own template; teacher_tokenizer may be None
+    (plain fine-tuning). Prompts are cut to prompt_max_len tokens when it is set.
+    """
+
+    def __init__(self, file_path, student_tokenizer, teacher_tokenizer=None, prompt_max_len=None):
 
         self.dataset = []
 
@@ -153,8 +166,12 @@ class LLMDataset(Dataset):
                     data['prompt'] = student_tokenizer.decode(s_prompt['input_ids'])
                 data['s_prompt_len'] = len(s_prompt['input_ids'])
 
-                t_prompt = teacher_tokenizer(data['prompt'])
-                data['t_prompt_len'] = len(t_prompt['input_ids'])
+                data.setdefault('teacher_prompt', data['prompt'])
+                if teacher_tokenizer is not None:
+                    t_prompt = teacher_tokenizer(data['teacher_prompt'], add_special_tokens=False)
+                    data['t_prompt_len'] = len(t_prompt['input_ids'])
+                else:
+                    data['t_prompt_len'] = 0
 
 
     def __len__(self):
@@ -163,13 +180,13 @@ class LLMDataset(Dataset):
     def __getitem__(self, index):
         data = self.dataset[index]
         return (data['prompt'], data['output'], data['s_prompt_len'], data['t_prompt_len'],
-                data.get('id', index))
-    
+                data.get('id', index), data['teacher_prompt'])
+
 
 @dataclass
 class LLMDataCollator:
     student_tokenizer: PreTrainedTokenizer = None
-    teacher_tokenizer: PreTrainedTokenizer = None
+    teacher_tokenizer: PreTrainedTokenizer = None  # None: student inputs and labels only
     do_train: bool = True
     max_len: int = 512
     pad_to_multiple_of: int = 4
@@ -187,15 +204,19 @@ class LLMDataCollator:
 
 
     def __call__(self, batch):
-        prompts, fulls, prompt_lengths, teacher_prompt_lengths, example_ids = [], [], [], [], []
-        for prompt, output, prompt_length, teacher_prompt_length, example_id in batch:
+        prompts, fulls, teacher_fulls, prompt_lengths, teacher_prompt_lengths, example_ids = [], [], [], [], [], []
+        shifts = []
+        for prompt, output, prompt_length, teacher_prompt_length, example_id, teacher_prompt in batch:
             example_ids.append(example_id)
             prompts.append(prompt)
             fulls.append(prompt + output)
+            teacher_fulls.append(teacher_prompt + output)
+            shifts.append(len(prompt) - len(teacher_prompt))
             prompt_lengths.append(prompt_length)
             teacher_prompt_lengths.append(teacher_prompt_length)
 
-        
+        use_teacher = self.do_train and self.teacher_tokenizer is not None
+
         student_inputs = self.student_tokenizer(
             fulls,
             add_special_tokens=False,  # the chat template supplies them, as in sgl's training and evaluation
@@ -205,17 +226,9 @@ class LLMDataCollator:
             return_tensors=self.return_tensors,
             return_token_type_ids=False,
             pad_to_multiple_of=self.pad_to_multiple_of,
-            return_offsets_mapping=self.return_offsets_mapping and self.do_train,
+            return_offsets_mapping=self.return_offsets_mapping and use_teacher,
         )
 
-        # tokenized_prompts = self.student_tokenizer(
-        #     prompts, 
-        #     max_length=self.max_len, 
-        #     padding=self.padding, 
-        #     truncation=True,
-        #     return_tensors=self.return_tensors,
-        # )
-        
         # labels[:, 1:] align with the logits: response tokens, then one EOS at the first position past the text
         # (an extra column makes room when a sample fills the batch). Prompt and padding are masked.
         input_ids = student_inputs["input_ids"]
@@ -235,10 +248,14 @@ class LLMDataCollator:
 
         student_inputs['example_ids'] = torch.tensor(example_ids)
 
+        if not use_teacher:
+            return student_inputs, None, labels
+
         student_token_offset_mapping = student_inputs.pop('offset_mapping', None)
 
         teacher_inputs = self.teacher_tokenizer(
-            fulls,
+            teacher_fulls,
+            add_special_tokens=False,
             truncation=True,
             padding=self.padding,
             max_length=self.max_len,
@@ -247,14 +264,6 @@ class LLMDataCollator:
             pad_to_multiple_of=self.pad_to_multiple_of,
             return_offsets_mapping=self.return_offsets_mapping,
         )
-        # teacher_prompts = self.teacher_tokenizer(
-        #     prompts, 
-        #     max_length=self.max_len, 
-        #     padding=self.padding, 
-        #     truncation=True,
-        #     return_tensors=self.return_tensors,
-        # )
-        # teacher_prompt_lengths = teacher_prompts["attention_mask"].sum(dim=1)
         teacher_prompt_lengths = torch.tensor(teacher_prompt_lengths)
 
         teacher_token_offset_mapping = teacher_inputs.pop('offset_mapping', None)
@@ -263,7 +272,7 @@ class LLMDataCollator:
             student_pooler_tensor, teacher_pooler_tensor = prepare_pooler_v2(
                 prompt_lengths, student_token_offset_mapping, student_inputs['attention_mask'].sum(dim=1),
                 teacher_prompt_lengths, teacher_token_offset_mapping, teacher_inputs['attention_mask'].sum(dim=1),
-                self.max_spans)
+                self.max_spans, shifts)
 
             student_inputs['pooler_safe_idx'] = student_pooler_tensor['safe_idx']
             student_inputs['pooler_mask'] = student_pooler_tensor['mask']
@@ -272,9 +281,8 @@ class LLMDataCollator:
 
             if self.span_provider is not None:
                 n_spans = student_pooler_tensor['mask'].any(dim=-1).sum(dim=1).tolist()
-                hashes = [hashlib.sha1(full.encode('utf-8')).hexdigest() for full in fulls]
                 student_inputs['span_weights_alloc'] = self.span_provider.batch_weights(
-                    example_ids, hashes, n_spans, student_pooler_tensor['mask'].size(1))
+                    example_ids, [text_hash(t) for t in fulls], [text_hash(t) for t in teacher_fulls], n_spans,
+                    student_pooler_tensor['mask'].size(1))
 
         return student_inputs, teacher_inputs, labels
-

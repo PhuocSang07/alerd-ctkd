@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from torch import Tensor
 from peft import PeftModel
 
-from layer_capture import LayerCapture
 from utils import get_span_hidden_states
 
 import logging
@@ -25,8 +24,8 @@ class TeacherOutput(ModelOutput):
 class Teacher:
     """Frozen teacher that is only teacher-forced: it returns span-level states, never full-sequence logits.
 
-    Works for any Llama-style decoder (Qwen2/Qwen3/Llama/Mistral). Attention runs fused for every layer; the
-    exported layers carry hooks that store their output and last-token attention row (layer_capture).
+    Any HF decoder works (Qwen2/Llama/Mistral/GPT-2). Attention is eager, as in SRA, so `output_attentions`
+    returns the weights whose last-token row gives the span masses; only the exported layers are kept.
     """
 
     def __init__(self, model_name, load_model_kwargs, export_hidden_state_layers,
@@ -34,6 +33,7 @@ class Teacher:
         print('Teacher loading model ...')
         load_model_kwargs = {k: v for k, v in load_model_kwargs.items()
                              if k not in ('output_hidden_states', 'output_attentions')}
+        load_model_kwargs.setdefault('attn_implementation', 'eager')
         self.model = AutoModelForCausalLM.from_pretrained(model_name, **load_model_kwargs)
         if sft_path is not None:
             self.model = PeftModel.from_pretrained(self.model, sft_path)
@@ -46,7 +46,6 @@ class Teacher:
         self.export_hidden_state_layers = export_hidden_state_layers
         self.weight_pooling = weight_pooling
         self.span_weight = span_weight
-        self.capture = LayerCapture(self.model, export_hidden_state_layers)
 
     @property
     def lm_head(self):
@@ -58,14 +57,12 @@ class Teacher:
         safe_idx = inputs.pop('pooler_safe_idx')
         pooler_mask = inputs.pop('pooler_mask')
 
-        self.capture.begin(inputs['attention_mask'])
         with torch.no_grad():
-            self.model.base_model(**inputs, use_cache=False)
-        self.capture.end()
-
-        hidden_states, span_weights = get_span_hidden_states(
-            self.capture.hidden_states(), self.capture.rows, safe_idx, pooler_mask,
-            self.export_hidden_state_layers, self.weight_pooling, self.span_weight)
+            outputs = self.model.base_model(**inputs, output_hidden_states=True, output_attentions=True,
+                                            use_cache=False, return_dict=True)
+            hidden_states, span_weights = get_span_hidden_states(
+                outputs.hidden_states, outputs.attentions, inputs['attention_mask'], safe_idx, pooler_mask,
+                self.export_hidden_state_layers, self.weight_pooling, self.span_weight)
 
         return TeacherOutput(
             hidden_states=hidden_states,

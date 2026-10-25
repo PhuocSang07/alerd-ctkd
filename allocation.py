@@ -6,6 +6,7 @@ Ported from sgl.allocation.iwc.stable_iwc_step_weights; the mass l_k is a span c
 """
 import math
 import random
+import re
 import sys
 
 NORMALIZATIONS = ("per-trace", "corpus", "none")
@@ -13,7 +14,7 @@ SCORE_SOURCES = ("gain", "random", "predictability-easy", "predictability-hard",
 
 
 def last_boxed(text):
-    """Content of the last \\boxed{...}, brace-matched (same rule as sgl.data.s1k.last_boxed)."""
+    """Content of the last \\boxed{...}, brace-matched."""
     index = text.rfind("\\boxed{")
     if index == -1:
         return None
@@ -27,6 +28,11 @@ def last_boxed(text):
             if depth == 0:
                 return text[start:position].strip()
     return None
+
+
+def contains_answer(text, answer):
+    """Whether `answer` occurs in `text` as a whole token: "72" is in "= 72 clips" but not in "172" or "72.5"."""
+    return re.search(r"(?<![\w.])" + re.escape(answer) + r"(?!\w|\.\d)", text) is not None
 
 
 def exp_scores(scores, tau=1.0, clip=2.0, eps=1e-8):

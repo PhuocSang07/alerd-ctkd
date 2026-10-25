@@ -83,3 +83,11 @@ def test_last_boxed_matches_braces_and_takes_the_last_one():
     assert last_boxed("a \\boxed{1} b \\boxed{\\frac{3}{4}} c") == "\\frac{3}{4}"
     assert last_boxed("no answer here") is None
     assert last_boxed("unclosed \\boxed{12") is None
+
+
+def test_contains_answer_matches_whole_numbers_only():
+    from allocation import contains_answer
+
+    assert contains_answer("Natalia sold 48+24 = 72 clips", "72") and contains_answer("so boxed{72}.", "72")
+    assert not contains_answer("sold 172 clips", "72") and not contains_answer("costs 72.5 dollars", "72")
+    assert not contains_answer("0.72 of them", "72") and contains_answer("total: $72.", "72")

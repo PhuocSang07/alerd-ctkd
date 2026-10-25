@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from torch import nn, Tensor
 from peft import get_peft_model, LoraConfig, TaskType, PeftModel
 
-from layer_capture import LayerCapture
 from utils import get_span_hidden_states
 
 import os
@@ -37,6 +36,7 @@ class LLMModel(torch.nn.Module):
 
         load_model_kwargs = {k: v for k, v in load_model_kwargs.items()
                              if k not in ('output_hidden_states', 'output_attentions')}
+        load_model_kwargs.setdefault('attn_implementation', 'eager')
         self.model = AutoModelForCausalLM.from_pretrained(model_name, **load_model_kwargs)
 
         if sft_path is not None:
@@ -63,25 +63,21 @@ class LLMModel(torch.nn.Module):
 
         self.device = self.model.device
 
-        self.capture = LayerCapture(self.model, hidden_layer_fineturn)
-
     def forward(self, inputs: Dict[str, Tensor] = None):
         safe_idx = inputs.pop('pooler_safe_idx', None)
         pooler_mask = inputs.pop('pooler_mask', None)
         inputs.pop('example_ids', None)
 
-        self.capture.begin(inputs['attention_mask'])
-        outputs = self.model(**inputs, return_dict=True, use_cache=False)
-        self.capture.end()
+        distilled = safe_idx is not None and self.training
+        outputs = self.model(**inputs, output_hidden_states=distilled, output_attentions=distilled,
+                             return_dict=True, use_cache=False)
 
-        if not self.training:
+        if not distilled:
             return StudentOutput(logits=outputs.logits)
 
-        hidden_states, span_weights = None, None
-        if safe_idx is not None:
-            hidden_states, span_weights = get_span_hidden_states(
-                self.capture.hidden_states(), self.capture.rows, safe_idx, pooler_mask,
-                self.hidden_layer_fineturn, self.weight_pooling, self.span_weight)
+        hidden_states, span_weights = get_span_hidden_states(
+            outputs.hidden_states, outputs.attentions, inputs['attention_mask'], safe_idx, pooler_mask,
+            self.hidden_layer_fineturn, self.weight_pooling, self.span_weight)
 
         return StudentOutput(
             logits=outputs.logits,
@@ -121,7 +117,7 @@ class StudentCausalModel(torch.nn.Module):
 
         self.proj_hidden_layers = None
 
-        if teacher_hidden_size > 0:
+        if teacher_hidden_size > 0:  # no teacher (plain fine-tuning): no projections
             proj_list = []
             for i in range(len(self.model.hidden_layer_fineturn)):
                 W = nn.Parameter(torch.empty(self.model.model.config.hidden_size, teacher_hidden_size))

@@ -2,6 +2,7 @@ __pycache__/
 *.pyc
 work/
 outputs/
+results/
 *.pt
 *.safetensors
 .env
