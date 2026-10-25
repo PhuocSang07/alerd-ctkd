@@ -154,11 +154,11 @@ def test_unknown_method_and_student_are_rejected(tmp_path):
 def run_all(tmp_path, student, selection, env=None):
     work = make_work(tmp_path, student)
     (work / STUDENT_DIRS[student] / "spans-Qwen2.5-7B-Instruct.jsonl").write_text("{}\n")
-    full_env = dict(os.environ, PYTHON="echo", SGL_SRC=str(tmp_path), WORK_DIR=str(work), OUT_ROOT=str(tmp_path / "out"),
+    full_env = dict(os.environ, PYTHON="echo", WORK_DIR=str(work), OUT_ROOT=str(tmp_path / "out"),
                     RESULTS_DIR=str(tmp_path / "results"), **(env or {}))
     result = subprocess.run([BASH, "scripts/alerd_ctkd_run_all.sh", student, *selection], cwd=ROOT, env=full_env,
                             check=True, capture_output=True, text=True)
-    return [line for line in result.stdout.splitlines() if "run_sgl_eval.py" in line]
+    return [line for line in result.stdout.splitlines() if "benchmark_eval.py" in line]
 
 
 def tag_of(line):
@@ -174,7 +174,7 @@ def test_run_all_main_evaluates_zero_shot_and_teacher_then_every_method_and_seed
     gpt2_lines = [line for line in lines if "--tag gpt2-xl-" in line]
     assert all("--max-tokens 512 --max-model-len 1024" in line for line in gpt2_lines)
     assert "--max-tokens 1024 --max-model-len 2048" in lines[1]  # the teacher
-    assert all("--benchmarks gsm8k,math500" in line and "--n-samples 3" in line and "--grader math_verify" in line
+    assert all("--benchmarks gsm8k,math500" in line and "--n-samples 3" in line
                for line in lines)
     assert not any("--chat-template" in line for line in lines)
 
@@ -194,13 +194,13 @@ def test_run_all_rejects_an_unknown_student(tmp_path):
 
 
 def test_score_gain_script_scores_students_then_the_teacher_once(tmp_path):
-    env = dict(os.environ, PYTHON="echo", SGL_SRC=str(tmp_path))
+    env = dict(os.environ, PYTHON="echo")
     result = subprocess.run([BASH, "scripts/score_gain.sh", str(tmp_path / "work")], cwd=ROOT, env=env, check=True,
                             capture_output=True, text=True)
     lines = result.stdout.splitlines()
     commands = [line for line in lines if "token_gain.py records" in line]
     assert len(commands) == 3 and "--side student" in commands[0] and "--side student" in commands[1]
     assert "--side teacher" in commands[2] and "Qwen2.5-7B-Instruct" in commands[2]
-    assert sum("sgl.signals.answer_gain" in line for line in lines) == 3
+    assert sum("answer_gain.py" in line for line in lines) == 3
     assert sum("score_predictability.py" in line for line in lines) == 2  # students only
     assert any("prepare_sra_data.py build" in line and "gpt2-xl" in line for line in lines)

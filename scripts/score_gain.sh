@@ -1,22 +1,20 @@
 #!/bin/bash
 # Data preparation and answer-gain scoring (needs a GPU with vLLM; not meant for a laptop).
 #
-# Usage: SGL_SRC=/path/to/SpectralGuidedLearning/src bash scripts/score_gain.sh [WORK_DIR]
+# Usage: bash scripts/score_gain.sh [WORK_DIR]
 #
 # For every student: GSM8K train rows in that student's prompt format (train-sra.jsonl), token-level answer gain of the
 # frozen student (gain-tokens-<student>.json) and the per-line predictability scores. Once: the token-level answer gain
 # of the teacher, scored on the teacher's own prompt (shared by all students). Gain is measured at every token boundary
-# with sgl.signals.answer_gain, one "step" per token (token_gain.py), so a span's or a step's gain is a sum of token
+# with answer_gain.py, one "step" per token (token_gain.py), so a span's or a step's gain is a sum of token
 # gains. Authentication for gated models comes from the HF_TOKEN environment variable, never from this script.
 set -euo pipefail
 
-: "${SGL_SRC:?set SGL_SRC to the SpectralGuidedLearning src directory}"
 WORK_DIR=${1:-work}
 TEACHER=${TEACHER:-Qwen/Qwen2.5-7B-Instruct}
 STUDENTS=${STUDENTS:-"openai-community/gpt2-xl meta-llama/Llama-3.2-1B-Instruct"}
 MAX_MODEL_LEN=${MAX_MODEL_LEN:-2048}
 PYTHON=${PYTHON:-python}
-export PYTHONPATH="${SGL_SRC}${PYTHONPATH:+:${PYTHONPATH}}"
 
 score() {  # score <model> <side: student|teacher> <data jsonl> <out dir>; writes gain-tokens-<model>.json
   local model=$1 side=$2 data=$3 out=$4 tag
@@ -24,7 +22,7 @@ score() {  # score <model> <side: student|teacher> <data jsonl> <out dir>; write
   mkdir -p "${out}"
   "${PYTHON}" token_gain.py records --data "${data}" --tokenizer "${model}" --side "${side}" \
     --output "${out}/tokens-${tag}.jsonl"
-  "${PYTHON}" -m sgl.signals.answer_gain --data-path "${out}/tokens-${tag}.jsonl" --model "${model}" \
+  "${PYTHON}" answer_gain.py --data-path "${out}/tokens-${tag}.jsonl" --model "${model}" \
     --output "${out}/gain-raw-${tag}.json" --max-model-len "${MAX_MODEL_LEN}"
   "${PYTHON}" token_gain.py pack --records "${out}/tokens-${tag}.jsonl" --gains "${out}/gain-raw-${tag}.json" \
     --model "${model}" --tokenizer "${model}" --output "${out}/gain-tokens-${tag}.json"

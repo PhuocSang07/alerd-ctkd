@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from helpers import CHAT_TEMPLATE, make_text, train_tokenizer  # noqa: E402
 from prepare_sra_data import build_rows, check_boundary, clean_rows, convert_row, main  # noqa: E402
 from prompts import FIXED_DATE, INSTRUCTION, build_prompt, has_chat_template  # noqa: E402
-from run_sgl_eval import build_prompts, gsm8k_gold, gsm8k_records  # noqa: E402
+from benchmark_eval import build_prompts, gsm8k_gold, gsm8k_records  # noqa: E402
 
 GSM8K_ROW = {
     "question": "Natalia sold clips to 48 of her friends in April, and then she sold half as many clips in May. "
@@ -115,7 +115,7 @@ def test_cli_clean_then_build(tmp_path, tokenizers):
 
 # ---- evaluation side: the benchmark and the prompt the model is evaluated on ----------------------------------
 
-def test_gsm8k_benchmark_records_match_the_sgl_format():
+def test_gsm8k_benchmark_records_have_the_benchmark_format():
     records = gsm8k_records([GSM8K_ROW, {"question": "q2", "answer": "a\n#### 1,250"}])
     assert [r["gold"] for r in records] == ["72", "1250"] and gsm8k_gold("x\n#### 7") == "7"
     assert records[0]["prompt"] == INSTRUCTION.format(question=GSM8K_ROW["question"])
@@ -137,17 +137,3 @@ def test_a_prompt_longer_than_the_context_stops_the_run(tokenizers, tmp_path):
     raw.save_pretrained(tmp_path / "m")
     with pytest.raises(ValueError, match="does not fit"):
         build_prompts("unused", gsm8k_records([GSM8K_ROW]), {"base_model": str(tmp_path / "m"), "max_model_len": 8})
-
-
-def test_instruction_matches_sgl_math_prompt():
-    sgl_src = os.environ.get("SGL_SRC")
-    if not sgl_src or not os.path.isdir(sgl_src):
-        pytest.skip("set SGL_SRC to compare with sgl")
-    sys.path.insert(0, sgl_src)
-    try:
-        benchmarks = pytest.importorskip("sgl.eval.benchmarks")
-        prepare = pytest.importorskip("sgl.data.prepare")
-    finally:
-        sys.path.remove(sgl_src)
-    assert INSTRUCTION.format(question="Q") == benchmarks.MATH_PROMPT.format(question="Q")
-    assert INSTRUCTION.format(question="Q") == prepare.PROMPT_TEMPLATE.format(problem="Q")

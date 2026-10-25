@@ -1,6 +1,7 @@
 # ALERD-CTKD trên GSM8K: Qwen2.5-7B-Instruct dạy GPT2-XL và Llama-3.2-1B-Instruct
 
 Đã đổi code trong `D:\SRE` theo plan mới (data GSM8K, hai student, attention eager, gain theo span với ba nguồn,
+> Cập nhật: phần gain, eval và chấm điểm của `sgl` đã được đưa vào repo này (`answer_gain.py`, `benchmark_eval.py`, `answer_scoring.py`); không còn dùng `SGL_SRC`.
 eval GSM8K + MATH500). Không sửa `D:\SpectralGuidedLearning`; `sgl` chỉ được import. Mọi thứ chạy được trên CPU đã
 kiểm; không có bước GPU nào được chạy, nên chưa có số train, gain hay eval thật.
 

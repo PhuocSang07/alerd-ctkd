@@ -140,18 +140,10 @@ def test_cli_records_then_pack(world, tmp_path):
     assert set(packed["samples"]) == {"0", "1", "2"} and packed["tokenizer"] == "t"
 
 
-def test_records_feed_sgl_answer_gain_and_its_answer_is_the_gsm8k_answer(world):
-    src = os.environ.get("SGL_SRC")
-    if not src or not os.path.isdir(src):
-        pytest.skip("set SGL_SRC to compare with sgl")
-    sys.path.insert(0, src)
-    try:
-        from sgl.eval.graders.answer_scoring import extract_boxed
-        from sgl.signals.answer_gain import PROBE
-    except ImportError as error:
-        pytest.skip(f"sgl is not importable here: {error}")
-    finally:
-        sys.path.remove(src)
+def test_records_feed_answer_gain_and_its_answer_is_the_gsm8k_answer(world):
+    from answer_gain import PROBE
+    from answer_scoring import extract_boxed
+
     assert PROBE == "\n\nTherefore, the final answer is \\boxed{"
     for row in world["rows"]:
         record = token_record(world["student"], row, "student")

@@ -10,9 +10,6 @@ Setting: Qwen2.5-7B-Instruct (teacher, no extra SFT) teaches **GPT2-XL** and **L
 fine-tuning) on **GSM8K train** (7,473 problems). Evaluation: GSM8K test (1,319) and MATH500, n=3 samples, pass@1 and
 pass@3 graded by Math-Verify.
 
-Data preparation, gain scoring and evaluation call the `sgl` package (the SpectralGuidedLearning repository) as a
-library; point `SGL_SRC` at its `src` directory. Nothing here modifies it.
-
 ## 1. Environment
 
 Python >= 3.9, PyTorch >= 2.4, transformers >= 4.44.
@@ -21,7 +18,7 @@ Python >= 3.9, PyTorch >= 2.4, transformers >= 4.44.
 pip install -r requirements.txt
 ```
 
-GPU steps (gain scoring and evaluation through `sgl`) also need vLLM. The Hugging Face token is read from the
+GPU steps (`answer_gain.py` and `benchmark_eval.py`) also need vLLM (`pip install vllm`). The Hugging Face token is read from the
 `HF_TOKEN` environment variable (Llama-3.2 is gated); it is never passed on a command line or written to a script.
 
 ## 2. What changed from the original SRA code
@@ -47,7 +44,7 @@ GPU steps (gain scoring and evaluation through `sgl`) also need vLLM. The Huggin
 Every line is a step.
 
 The prompt is the instruction `Please reason step by step, and put your final answer within \boxed{}.` followed
-directly by the question (the prompt of `sgl.eval`):
+directly by the question (the same prompt in training, gain scoring and evaluation):
 
 * models **with a chat template** (Llama-3.2-Instruct, Qwen2.5-Instruct): the instruction is one user turn rendered with
   `add_generation_prompt=True`; the Llama date line is fixed so that train and eval prompts match on any day;
@@ -55,7 +52,7 @@ directly by the question (the prompt of `sgl.eval`):
   immediately. The pad token is set to EOS for batching and EOS is supervised after the response. `max_len` must stay
   <= 1,024 (checked at start-up); evaluation generates at most 512 tokens (`MAX_TOKENS`).
 
-Evaluation uses the same prompts (`run_sgl_eval.py`), so the chat-template flags of `sgl.eval` are not needed. GPT-2 will
+Evaluation (`benchmark_eval.py`) builds the same prompts. GPT-2 will
 score very low; its role is the comparison between methods.
 
 Prompt and output are tokenized jointly (as the trainer does); the build step fails if a token would straddle the
@@ -67,11 +64,11 @@ Steps marked **GPU** need a GPU (the rest run on CPU). Run them in this order.
 
 1. **Data and gain scoring** (GPU, vLLM):
    ```
-   SGL_SRC=/path/to/SpectralGuidedLearning/src bash scripts/score_gain.sh
+   bash scripts/score_gain.sh
    ```
    Output: `work/gsm8k-clean.jsonl`; per student `work/<student>/{train-sra.jsonl, tokens-<student>.jsonl,
    gain-tokens-<student>.json, predictability.json}`; once for the teacher `work/Qwen2.5-7B-Instruct/gain-tokens-Qwen2.5-7B-Instruct.json`.
-   The gain is measured with `sgl.signals.answer_gain` at **every token boundary** of the scoring model (each response
+   The gain is measured with `answer_gain.py` at **every token boundary** of the scoring model (each response
    token is one "step", `t = 0` included) with the probe `"\n\nTherefore, the final answer is \boxed{"` and the target
    `N}`. A span's gain is `b_end - b_start` of its token range in the scoring model's own tokenization, a step's gain the
    sum over its tokens, so both come from the same `b_t`. Each file records the sha1 of the text it was scored on and the
@@ -90,7 +87,7 @@ Steps marked **GPU** need a GPU (the rest run on CPU). Run them in this order.
    attention and omega used by `analyze_weights.py`. Output: `outputs/<student>/<method>/seed-<seed>/`.
 3. **Evaluate** (GPU, vLLM). Zero-shot, teacher and trained checkpoints under the ALERD protocol:
    ```
-   SGL_SRC=... bash scripts/alerd_ctkd_eval.sh outputs/llama-3.2-1b/alerd-ctkd/seed-42 llama-3.2-1b-alerd-ctkd-s42 meta-llama/Llama-3.2-1B-Instruct
+   bash scripts/alerd_ctkd_eval.sh outputs/llama-3.2-1b/alerd-ctkd/seed-42 llama-3.2-1b-alerd-ctkd-s42 meta-llama/Llama-3.2-1B-Instruct
    ```
    `scripts/alerd_ctkd_run_all.sh <student> main|ablations` chains zero-shot, teacher, training and evaluation (three seeds
    for the main table, one seed for ablations).
@@ -124,7 +121,7 @@ python -m pytest tests
 ```
 
 They run offline on CPU with small randomly initialised models (Qwen2, Llama, GPT-2) and tokenizers trained on the spot;
-set `SGL_SRC` to also compare the prompt text with `sgl`'s. They cover the attention row of the last real token under
+They cover the attention row of the last real token under
 padding, the KD losses against the original SRA code, the ALERD toy table, the GSM8K conversion, the span index for a
 GPT-2-style and a Llama-style tokenizer, the gain arithmetic (span gains add up to step gains, `diff` is a difference,
 missing or mismatched files stop the run), a full training run for each student type and for SFT, the shell scripts

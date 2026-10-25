@@ -1,6 +1,6 @@
 #!/bin/bash
 # Train and evaluate a set of methods for one student (alerd_ctkd_train.sh and alerd_ctkd_eval.sh; the environment of
-# both applies: SGL_SRC for evaluation, TEACHER*, GAIN_SOURCE and GAIN_UNIT for training).
+# both applies: TEACHER*, GAIN_SOURCE and GAIN_UNIT for training).
 #
 # Usage: bash scripts/alerd_ctkd_run_all.sh <student> [main|ablations|<method> ...]
 #   main        sft, sra, sra-uniform, alerd-ctkd on SEEDS [42 43 44], after the zero-shot and teacher evaluations

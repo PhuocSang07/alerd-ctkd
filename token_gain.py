@@ -2,12 +2,12 @@ r"""Token-level answer gain for any scoring model (student or teacher), and the 
 
     python token_gain.py records --data work/<student>/train-sra.jsonl --tokenizer <model> --side student|teacher \
         --output work/<student>/tokens-<model>.jsonl
-    python -m sgl.signals.answer_gain --data-path work/<student>/tokens-<model>.jsonl --model <model> \
+    python answer_gain.py --data-path work/<student>/tokens-<model>.jsonl --model <model> \
         --output work/<student>/gain-raw-<model>.json
     python token_gain.py pack --records work/<student>/tokens-<model>.jsonl --gains work/<student>/gain-raw-<model>.json \
         --model <model> --tokenizer <model> --output work/<student>/gain-tokens-<model>.json
 
-`records` writes the input of sgl.signals.answer_gain with every response token as its own "step", so the sgl script
+`records` writes the input of answer_gain.py with every response token as its own "step", so that script
 measures b_t = log m(a* | x, y_{<=t}, probe) at every token boundary of the scoring model m (t = 0 included) and returns
 the token gains g_t = b_t - b_{t-1}. The text is the model's own prompt + the shared output, tokenized jointly exactly as
 the trainer tokenizes it. `line_steps` holds the token span of each solution line for the step-level gains and for
@@ -118,7 +118,7 @@ def main(argv=None):
     r.add_argument("--output", required=True)
     p = sub.add_parser("pack")
     p.add_argument("--records", required=True)
-    p.add_argument("--gains", required=True, help="output of sgl.signals.answer_gain")
+    p.add_argument("--gains", required=True, help="output of answer_gain.py")
     p.add_argument("--model", required=True)
     p.add_argument("--tokenizer", required=True)
     p.add_argument("--output", required=True)

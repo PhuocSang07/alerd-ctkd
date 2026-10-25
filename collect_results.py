@@ -1,9 +1,9 @@
-r"""Collect sgl evaluation summaries into LaTeX tables laid out like Tables 2-5 of ALERD.
+r"""Collect evaluation summaries into LaTeX tables laid out like Tables 2-5 of ALERD.
 
     python collect_results.py --results-dir results --table main --output tables/main.tex
     python collect_results.py --results-dir results --table ablations --output tables/ablations.tex
 
-Reads <results-dir>/<tag>/summary.json written by sgl.eval.evaluate (see scripts/alerd_ctkd_eval.sh). Tags:
+Reads <results-dir>/<tag>/summary.json written by benchmark_eval.py (see scripts/alerd_ctkd_eval.sh). Tags:
 <student>-zeroshot, teacher, and <student>-<method>-s<seed> for every trained row (method names of
 scripts/alerd_ctkd_train.sh). A trained row is the mean over the seeds found; the ablation table uses one seed
 (--ablation-seed). A row without results is left out and reported on stderr. Within a block the best value of a column is

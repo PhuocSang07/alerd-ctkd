@@ -1,6 +1,6 @@
 r"""Prompt text shared by data preparation, gain scoring, training and evaluation.
 
-The instruction is the one of sgl.eval.benchmarks.MATH_PROMPT (instruction first, no separator). A tokenizer with a chat
+The instruction comes first with no separator before the question. A tokenizer with a chat
 template wraps it as a single user turn; a tokenizer without one (GPT-2) gets the instruction as raw text, so every model
 sees the same words and only the wrapping differs. Special tokens come from the template, so the prompt is tokenized
 with add_special_tokens=False everywhere.

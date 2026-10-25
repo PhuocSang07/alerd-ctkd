@@ -2,7 +2,7 @@
 
 A step k holding l_k spans gets a weight w_k with sum_k l_k * w_k = N (N = number of spans), so
 a span inherits omega_n = w_k(n) / N and sum_n omega_n = 1, the normalisation of SRA Eq. 8.
-Ported from sgl.allocation.iwc.stable_iwc_step_weights; the mass l_k is a span count here.
+The mass l_k is a span count here.
 """
 import math
 import random

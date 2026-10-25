@@ -219,7 +219,7 @@ class LLMDataCollator:
 
         student_inputs = self.student_tokenizer(
             fulls,
-            add_special_tokens=False,  # the chat template supplies them, as in sgl's training and evaluation
+            add_special_tokens=False,  # the chat template supplies them, as in evaluation
             truncation=True,
             padding=self.padding,
             max_length=self.max_len,
