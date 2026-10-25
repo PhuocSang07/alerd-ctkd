@@ -18,6 +18,12 @@ score_predictability.py.
                                             "token_gains": [g_t], "step_gains": [sum of g_t over each line]}}}
 A span covering response tokens [a, b) has gain b_b - b_a = sum(token_gains[a - start : b - start]); the gain of a step is
 the sum over the tokens that end inside it, the same rule that assigns a span to a step.
+
+    python token_gain.py signals --spans work/spans.jsonl --student-gains <student gain-tokens> \
+        --teacher-gains <teacher gain-tokens> --output work/span-gains.json
+
+`signals` exports the two signals of the span-weighted losses per span, u^S (the student's span gain, for the CE weights)
+and u^T - u^S (teacher minus student, for the KL weights): {id: {"hash", "teacher_hash", "student", "teacher", "diff"}}.
 """
 import argparse
 import json
@@ -107,6 +113,18 @@ def span_gains(entry, token_ranges):
     return [prefix[b - offset] - prefix[a - offset] for a, b in token_ranges]
 
 
+def span_signals(span_row, student_file, teacher_file):
+    """Per-span gains of both scoring models for one indexed sample; each file checks the hash and token range."""
+    rid = span_row["id"]
+    gains = {}
+    for role, file, hash_key in (("student", student_file, "hash"), ("teacher", teacher_file, "teacher_hash")):
+        tokens = span_row[f"{role}_tokens"]
+        entry = file.entry(rid, span_row[hash_key], tokens[0][0], tokens[-1][1])
+        gains[role] = span_gains(entry, tokens)
+    return {"hash": span_row["hash"], "teacher_hash": span_row["teacher_hash"], "student": gains["student"],
+            "teacher": gains["teacher"], "diff": [t - s for t, s in zip(gains["teacher"], gains["student"])]}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -116,6 +134,11 @@ def main(argv=None):
     r.add_argument("--side", choices=("student", "teacher"), required=True,
                    help="which prompt of the row the scoring model sees")
     r.add_argument("--output", required=True)
+    g = sub.add_parser("signals")
+    g.add_argument("--spans", required=True, help="spans.jsonl from span_index.py")
+    g.add_argument("--student-gains", required=True, help="gain-tokens json of the student (pack)")
+    g.add_argument("--teacher-gains", required=True, help="gain-tokens json of the teacher (pack)")
+    g.add_argument("--output", required=True)
     p = sub.add_parser("pack")
     p.add_argument("--records", required=True)
     p.add_argument("--gains", required=True, help="output of answer_gain.py")
@@ -133,6 +156,14 @@ def main(argv=None):
             for record in records:
                 handle.write(json.dumps(record) + "\n")
         print(f"{len(records)} records, {sum(len(r['steps']) for r in records):,} token probes -> {args.output}")
+        return
+
+    if args.command == "signals":
+        student, teacher = GainFile(args.student_gains, "student"), GainFile(args.teacher_gains, "teacher")
+        signals = {str(row["id"]): span_signals(row, student, teacher) for row in read_jsonl(args.spans)}
+        with open(args.output, "w", encoding="utf-8", newline="\n") as handle:
+            json.dump(signals, handle)
+        print(f"wrote span gains of {len(signals)} samples -> {args.output}")
         return
 
     with open(args.gains, encoding="utf-8") as handle:

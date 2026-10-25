@@ -13,6 +13,7 @@ by token_gain.py. Output: {id: [gain per step]} JSON.
 """
 import argparse
 import json
+import time
 from pathlib import Path
 
 from answer_scoring import extract_boxed
@@ -60,9 +61,11 @@ def main(argv=None):
             index.append((record["id"], k, len(answer_ids)))
     print(f"{len(prompts):,} probes over {len(records) - skipped} samples (skipped {skipped} without \\boxed)")
 
+    started = time.time()
     llm = LLM(model=args.model, dtype="bfloat16", gpu_memory_utilization=args.gpu_memory_utilization,
               max_model_len=args.max_model_len, enable_prefix_caching=True, enforce_eager=True)
     outputs = llm.generate(prompts, SamplingParams(max_tokens=1, prompt_logprobs=0))
+    print(f"scored {len(prompts):,} probes with {args.model} in {time.time() - started:.0f} s (model load included)")
 
     logp = {}  # (id, k) -> log p(answer | prefix up to step k)
     for (rid, k, n_answer), out, prompt in zip(index, outputs, prompts):

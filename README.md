@@ -73,6 +73,20 @@ Steps marked **GPU** need a GPU (the rest run on CPU). Run them in this order.
    `N}`. A span's gain is `b_end - b_start` of its token range in the scoring model's own tokenization, a step's gain the
    sum over its tokens, so both come from the same `b_t`. Each file records the sha1 of the text it was scored on and the
    tokenizer name, and the trainer stops if they do not match the span index.
+
+   **Same-tokenizer word spans** (student and teacher share a tokenizer, e.g. Qwen2.5-1.5B-Instruct and
+   Qwen2.5-14B-Instruct): `word_spans.py` runs SRA's matching of end offsets against the end offsets of words (a number
+   with separators such as `1,200` or `3.5`, a `\w+` run, or one other character; the space before a word and the line
+   break after the last word of a line belong to it). A token that crosses several words merges them; every response
+   token is in exactly one span and no span crosses a line. Enable it with `span_index.py --span-mode word` and the
+   trainer argument `--span_mode word`; the teacher's spans are the student's shifted by the prompt-length difference.
+   ```
+   STUDENTS=Qwen/Qwen2.5-1.5B-Instruct TEACHER=Qwen/Qwen2.5-14B-Instruct SPAN_MODE=word bash scripts/score_gain.sh
+   LIMIT=1000 STUDENTS=... TEACHER=... SPAN_MODE=word bash scripts/score_gain.sh   # cost: first 1,000 problems
+   ```
+   `SPAN_MODE=word` adds `work/<student>/spans-<teacher>.jsonl` and `work/<student>/span-gains.json`, the two signals per
+   span (`student` for the CE weights, `diff` = teacher minus student for the KL weights). `LIMIT` writes to
+   `<WORK_DIR>-limit<N>` and prints the probe counts and the wall time of each scoring run.
 2. **Train** (GPU). Defaults: teacher layer 28 of Qwen2.5-7B (`TEACHER_LAYER`, `TEACHER_DIM=3584`), last layer of the
    student (48 for GPT2-XL, 16 for Llama-3.2-1B), 3 epochs, lr 5e-5 cosine to 1e-5, warm-up 10%, effective batch
    32 (8 x 4), `max_len` 512:

@@ -7,17 +7,21 @@ One row per sample: id, hash / teacher_hash (sha1 of the student / teacher text)
 student_tokens / teacher_tokens ([start, end) per span), truncated / boxed_cut (the sample exceeds max_len / loses its final boxed answer),
 step_of_span (step holding the span's last
 character, None without step_char_ends) and crosses_step (the span's first and last character fall in
-different steps). The span computation is sample_span_bounds from data_utils, the function the collator uses.
+different steps). The span computation is the one the collator uses: sample_span_bounds from data_utils, or with
+--span-mode word (one tokenizer for both models) word_pair_bounds from word_spans.
 """
 import argparse
 import json
 import statistics
 from bisect import bisect_right
 
+import numpy as np
+
 from data_utils import LLMDataset, sample_span_bounds, text_hash
+from word_spans import word_pair_bounds
 
 
-def sample_spans(example, student_tokenizer, teacher_tokenizer, max_len, max_spans=None):
+def sample_spans(example, student_tokenizer, teacher_tokenizer, max_len, max_spans=None, span_mode="sra"):
     """Spans of one example tokenized on its own (no batch padding), as the collator tokenizes it."""
     full = example["prompt"] + example["output"]
     teacher_prompt = example.get("teacher_prompt", example["prompt"])
@@ -25,6 +29,11 @@ def sample_spans(example, student_tokenizer, teacher_tokenizer, max_len, max_spa
                                 return_offsets_mapping=True)
     teacher = teacher_tokenizer(teacher_prompt + example["output"], add_special_tokens=False, truncation=True,
                                 max_length=max_len, return_offsets_mapping=True)
+    if span_mode == "word":
+        bounds = word_pair_bounds(np.asarray(student["offset_mapping"]), len(teacher["offset_mapping"]),
+                                  example["s_prompt_len"], example["t_prompt_len"], example["prompt"],
+                                  example["output"], max_spans)
+        return bounds, student["offset_mapping"]
     bounds = sample_span_bounds(student["offset_mapping"], teacher["offset_mapping"],
                                 example["s_prompt_len"], example["t_prompt_len"], max_spans,
                                 len(example["prompt"]) - len(teacher_prompt))
@@ -75,10 +84,10 @@ def truncation_flags(example, student_tokenizer, teacher_tokenizer, max_len):
     return truncated, boxed_cut
 
 
-def build_rows(dataset, student_tokenizer, teacher_tokenizer, max_len, max_spans=None):
+def build_rows(dataset, student_tokenizer, teacher_tokenizer, max_len, max_spans=None, span_mode="sra"):
     rows = []
     for example in dataset.dataset:
-        bounds, offsets = sample_spans(example, student_tokenizer, teacher_tokenizer, max_len, max_spans)
+        bounds, offsets = sample_spans(example, student_tokenizer, teacher_tokenizer, max_len, max_spans, span_mode)
         row = span_row(example, bounds, offsets)
         row["truncated"], row["boxed_cut"] = truncation_flags(example, student_tokenizer, teacher_tokenizer, max_len)
         rows.append(row)
@@ -98,6 +107,8 @@ def main(argv=None):
     parser.add_argument("--teacher-tokenizer", required=True)
     parser.add_argument("--max-len", type=int, default=512)
     parser.add_argument("--max-spans", type=int, default=None, help="cap on spans per sample; default keeps all")
+    parser.add_argument("--span-mode", choices=("sra", "word"), default="sra",
+                        help="sra: match the token ends of two tokenizers; word: words against one shared tokenizer")
     parser.add_argument("--output", required=True)
     args = parser.parse_args(argv)
 
@@ -107,13 +118,18 @@ def main(argv=None):
     teacher = AutoTokenizer.from_pretrained(args.teacher_tokenizer, trust_remote_code=True)
     print(f"padding_side student={student.padding_side} teacher={teacher.padding_side}")
     dataset = LLMDataset(args.data, student, teacher)
-    rows = build_rows(dataset, student, teacher, args.max_len, args.max_spans)
+    rows = build_rows(dataset, student, teacher, args.max_len, args.max_spans, args.span_mode)
     with open(args.output, "w", encoding="utf-8") as handle:
         for row in rows:
             handle.write(json.dumps(row) + "\n")
     truncated, boxed_cut = sum(r["truncated"] for r in rows), sum(r["boxed_cut"] for r in rows)
     print(f"truncated at max_len={args.max_len}: {truncated} samples, of which {boxed_cut} lose the final boxed answer")
     print(f"{len(rows)} samples; spans/sample {summarize([len(r['char_ends']) for r in rows])}")
+    sizes = [b - a for r in rows for a, b in r["student_tokens"]]
+    n_tokens = sum(sizes)
+    print(f"tokens/span {summarize(sizes)}; response tokens {n_tokens:,}; spans {len(sizes):,}")
+    print(f"answer-gain probes per scoring model (one per boundary, start included): at every token {n_tokens + len(rows):,}, "
+          f"at span ends only {len(sizes) + len(rows):,}")
     if rows and rows[0]["step_of_span"] is not None:
         crossing = sum(sum(r["crosses_step"]) for r in rows)
         total = sum(len(r["char_ends"]) for r in rows)

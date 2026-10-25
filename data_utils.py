@@ -110,16 +110,25 @@ def sample_span_bounds(student_offset, teacher_offset, student_start, teacher_st
 
 
 def prepare_pooler_v2(student_starts, student_offset_mapping, student_lengths,
-                      teacher_starts, teacher_offset_mapping, teacher_lengths, max_spans=None, teacher_shifts=None):
+                      teacher_starts, teacher_offset_mapping, teacher_lengths, max_spans=None, teacher_shifts=None,
+                      word_texts=None):
+    """Pooling indices of the spans of a batch; word_texts = [(prompt, output)] per sample selects word spans."""
     student_seg_idxs, teacher_seg_idxs = [], []
     teacher_shifts = teacher_shifts if teacher_shifts is not None else [0] * len(student_starts)
-    for student_start, student_offset, student_len, teacher_start, teacher_offset, teacher_len, shift in zip(
+    word_texts = word_texts if word_texts is not None else [None] * len(student_starts)
+    for student_start, student_offset, student_len, teacher_start, teacher_offset, teacher_len, shift, texts in zip(
             student_starts, student_offset_mapping, student_lengths,
-            teacher_starts, teacher_offset_mapping, teacher_lengths, teacher_shifts):
+            teacher_starts, teacher_offset_mapping, teacher_lengths, teacher_shifts, word_texts):
 
-        bounds = sample_span_bounds(student_offset[:int(student_len)].numpy(),
-                                    teacher_offset[:int(teacher_len)].numpy(),
-                                    student_start.item(), teacher_start.item(), max_spans, shift)
+        if texts is not None:
+            from word_spans import word_pair_bounds  # word_spans builds on this module
+
+            bounds = word_pair_bounds(student_offset[:int(student_len)].numpy(), teacher_len, student_start.item(),
+                                      teacher_start.item(), texts[0], texts[1], max_spans)
+        else:
+            bounds = sample_span_bounds(student_offset[:int(student_len)].numpy(),
+                                        teacher_offset[:int(teacher_len)].numpy(),
+                                        student_start.item(), teacher_start.item(), max_spans, shift)
         student_seg_idx, teacher_seg_idx = [], []
         student_max_len, teacher_max_len = 1, 1
 
@@ -195,8 +204,11 @@ class LLMDataCollator:
     return_offsets_mapping: bool = True
     max_spans: int = None
     span_provider: object = None  # span_weights.SpanWeightProvider
+    span_mode: str = 'sra'  # sra: matched token ends of two tokenizers | word: words against one tokenizer
 
     def __post_init__(self):
+        if self.span_mode not in ('sra', 'word'):
+            raise ValueError(f"span_mode must be 'sra' or 'word', not {self.span_mode!r}")
         # Span indices start at the prompt length, which only holds with right padding.
         for name, tokenizer in (('student', self.student_tokenizer), ('teacher', self.teacher_tokenizer)):
             if self.do_train and tokenizer is not None and tokenizer.padding_side != 'right':
@@ -205,10 +217,12 @@ class LLMDataCollator:
 
     def __call__(self, batch):
         prompts, fulls, teacher_fulls, prompt_lengths, teacher_prompt_lengths, example_ids = [], [], [], [], [], []
+        texts = []
         shifts = []
         for prompt, output, prompt_length, teacher_prompt_length, example_id, teacher_prompt in batch:
             example_ids.append(example_id)
             prompts.append(prompt)
+            texts.append((prompt, output))
             fulls.append(prompt + output)
             teacher_fulls.append(teacher_prompt + output)
             shifts.append(len(prompt) - len(teacher_prompt))
@@ -272,7 +286,7 @@ class LLMDataCollator:
             student_pooler_tensor, teacher_pooler_tensor = prepare_pooler_v2(
                 prompt_lengths, student_token_offset_mapping, student_inputs['attention_mask'].sum(dim=1),
                 teacher_prompt_lengths, teacher_token_offset_mapping, teacher_inputs['attention_mask'].sum(dim=1),
-                self.max_spans, shifts)
+                self.max_spans, shifts, texts if self.span_mode == 'word' else None)
 
             student_inputs['pooler_safe_idx'] = student_pooler_tensor['safe_idx']
             student_inputs['pooler_mask'] = student_pooler_tensor['mask']

@@ -94,6 +94,7 @@ class Arguments:
     span_weight_source: str = field(
         default='attention',
         metadata={"help": "attention (SRA) | uniform | alerd | random | predictability-easy | predictability-hard"})
+    span_mode: str = field(default='sra', metadata={"help": "sra (token ends of two tokenizers) | word (words, one tokenizer for both models)"})
     spans_file: str = field(default=None, metadata={"help": "spans.jsonl from span_index.py (needed unless source=attention)"})
     gain_source: str = field(default='student', metadata={"help": "student | teacher | diff (teacher - student span gains)"})
     gain_unit: str = field(default='span', metadata={"help": "span (gain of each span) | step (spans inherit the gain of their step)"})

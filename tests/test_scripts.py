@@ -204,3 +204,27 @@ def test_score_gain_script_scores_students_then_the_teacher_once(tmp_path):
     assert sum("answer_gain.py" in line for line in lines) == 3
     assert sum("score_predictability.py" in line for line in lines) == 2  # students only
     assert any("prepare_sra_data.py build" in line and "gpt2-xl" in line for line in lines)
+
+
+def test_score_gain_word_mode_with_a_limit_scores_a_subset_and_exports_the_span_signals(tmp_path):
+    limited = tmp_path / "work-limit5"
+    limited.mkdir()
+    (limited / "gsm8k-clean.jsonl").write_text("{}\n" * 9)
+    env = dict(os.environ, PYTHON="echo", STUDENTS="Qwen/Qwen2.5-1.5B-Instruct", TEACHER="Qwen/Qwen2.5-14B-Instruct",
+               SPAN_MODE="word", LIMIT="5")
+    result = subprocess.run([BASH, "scripts/score_gain.sh", str(tmp_path / "work")], cwd=ROOT, env=env, check=True,
+                            capture_output=True, text=True)
+    lines = result.stdout.splitlines()
+    assert len((limited / "gsm8k-clean.jsonl").read_text().splitlines()) == 5
+    assert sum("answer_gain.py" in line for line in lines) == 2  # the student and the teacher
+    assert not any("score_predictability.py" in line for line in lines)
+    assert any("span_index.py" in line and "--span-mode word" in line and "spans-Qwen2.5-14B-Instruct.jsonl" in line
+               for line in lines)
+    assert any("token_gain.py signals" in line and "span-gains.json" in line for line in lines)
+    assert sum(line.startswith("scored ") for line in lines) == 2
+
+
+def test_score_gain_rejects_an_unknown_span_mode(tmp_path):
+    result = subprocess.run([BASH, "scripts/score_gain.sh", str(tmp_path)], cwd=ROOT,
+                            env=dict(os.environ, PYTHON="echo", SPAN_MODE="phrase"), capture_output=True)
+    assert result.returncode == 2

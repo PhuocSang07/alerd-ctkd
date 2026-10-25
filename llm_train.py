@@ -112,7 +112,7 @@ class Trainer:
                                        do_train=True, max_len = args.max_len,
                                        pad_to_multiple_of = args.pad_to_multiple_of,
                                        return_tensors = 'pt', padding = True,
-                                       span_provider=self.span_provider)
+                                       span_provider=self.span_provider, span_mode=args.span_mode)
 
         train_loader = DataLoader(train_dataset, batch_size=args.batch_size,
                                   shuffle=True, collate_fn=train_collate)
