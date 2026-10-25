@@ -29,6 +29,8 @@ def build_parser():
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.4)
     parser.add_argument("--max-model-len", type=int, default=16384)
     parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--max-num-batched-tokens", type=int, default=32768)
+    parser.add_argument("--max-num-seqs", type=int, default=512)
     return parser
 
 
@@ -63,8 +65,9 @@ def main(argv=None):
 
     started = time.time()
     llm = LLM(model=args.model, dtype="bfloat16", gpu_memory_utilization=args.gpu_memory_utilization,
-              max_model_len=args.max_model_len, enable_prefix_caching=True, enforce_eager=True)
-    outputs = llm.generate(prompts, SamplingParams(max_tokens=1, prompt_logprobs=0))
+              max_model_len=args.max_model_len, enable_prefix_caching=True, enforce_eager=True,
+              max_num_batched_tokens=args.max_num_batched_tokens, max_num_seqs=args.max_num_seqs)
+    outputs = llm.generate(prompts, SamplingParams(max_tokens=1, prompt_logprobs=0), use_tqdm=False)
     print(f"scored {len(prompts):,} probes with {args.model} in {time.time() - started:.0f} s (model load included)")
 
     logp = {}  # (id, k) -> log p(answer | prefix up to step k)
