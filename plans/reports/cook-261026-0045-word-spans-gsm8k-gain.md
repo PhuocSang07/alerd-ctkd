@@ -4,6 +4,9 @@ Phần CPU xong và chạy được; lần chạy thử 200 bài trên Modal (A1
 teacher, đến span theo từ và hai tín hiệu. Chưa chạy toàn bộ 7.473 bài và chưa có số đo chi phí đủ 1.000 bài (xem "Chưa làm được").
 Không sửa `D:\SpectralGuidedLearning`; `sgl` không còn được dùng (gain, eval và chấm điểm đã nằm trong repo này).
 
+Commit: `8664854` (span theo từ, tín hiệu, test, README), `9991c64` và `7804bc4` (chạy Modal, tăng tốc chấm gain, báo cáo), gộp vào
+`main` bằng `450a72f`; đã push lên `origin/main` của `PhuocSang07/alerd-ctkd` (private).
+
 ## Việc đã làm
 
 - **Span theo từ** (`word_spans.py`, mới). Từ là số có dấu phân cách (`1,200`, `3.5`), một chuỗi `\w+`, hoặc một ký tự khác;
