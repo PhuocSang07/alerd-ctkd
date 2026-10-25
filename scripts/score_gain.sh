@@ -21,6 +21,7 @@ TEACHER=${TEACHER:-Qwen/Qwen2.5-7B-Instruct}
 STUDENTS=${STUDENTS:-"openai-community/gpt2-xl meta-llama/Llama-3.2-1B-Instruct"}
 MAX_MODEL_LEN=${MAX_MODEL_LEN:-2048}
 MAX_LEN=${MAX_LEN:-512}
+GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION:-0.4}  # raise for a teacher whose weights fill a third of the GPU
 SPAN_MODE=${SPAN_MODE:-}
 LIMIT=${LIMIT:-}
 PYTHON=${PYTHON:-python}
@@ -35,7 +36,8 @@ score() {  # score <model> <side: student|teacher> <data jsonl> <out dir>; write
   "${PYTHON}" token_gain.py records --data "${data}" --tokenizer "${model}" --side "${side}" \
     --output "${out}/tokens-${tag}.jsonl"
   "${PYTHON}" answer_gain.py --data-path "${out}/tokens-${tag}.jsonl" --model "${model}" \
-    --output "${out}/gain-raw-${tag}.json" --max-model-len "${MAX_MODEL_LEN}"
+    --output "${out}/gain-raw-${tag}.json" --max-model-len "${MAX_MODEL_LEN}" \
+    --gpu-memory-utilization "${GPU_MEMORY_UTILIZATION}"
   "${PYTHON}" token_gain.py pack --records "${out}/tokens-${tag}.jsonl" --gains "${out}/gain-raw-${tag}.json" \
     --model "${model}" --tokenizer "${model}" --output "${out}/gain-tokens-${tag}.json"
   echo "scored ${model} (${side}) in $((SECONDS - started)) s including tokenization"
