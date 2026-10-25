@@ -6,3 +6,6 @@ results/
 *.pt
 *.safetensors
 .env
+
+# papers under review, kept local only
+*.pdf
