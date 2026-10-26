@@ -14,6 +14,7 @@ r"""Generate with vLLM on GSM8K test and MATH500, grade with Math-Verify, write 
 import argparse
 import json
 import os
+from math import comb
 from pathlib import Path
 
 from answer_scoring import grade_math_verify
@@ -60,7 +61,13 @@ def load_aime24():
                         "problem", "answer")
 
 
-BENCHMARKS = {"gsm8k": load_gsm8k, "math500": load_math500, "aime24": load_aime24}
+def load_aime25():
+    from datasets import load_dataset
+
+    return math_records(load_dataset(dataset_path("math-ai/aime25", "aime25"), split="test"), "problem", "answer")
+
+
+BENCHMARKS = {"gsm8k": load_gsm8k, "math500": load_math500, "aime24": load_aime24, "aime25": load_aime25}
 
 
 def build_prompts(model_path, records, config):
@@ -107,6 +114,7 @@ def score_file(path):
     with Path(path).open() as handle:
         rows = [json.loads(line) for line in handle]
     correct = total = truncated = unboxed = token_sum = solved = samples_per_problem = 0
+    at_3 = 0.0
     for row in rows:
         texts = [generation["text"] for generation in row["generations"]]
         labels = label_generations(texts, row["gold"])
@@ -117,6 +125,8 @@ def score_file(path):
             token_sum += generation.get("n_tokens", 0)
         correct += sum(labels)
         solved += int(sum(labels) > 0)
+        n = len(labels)
+        at_3 += 1.0 - comb(n - sum(labels), 3) / comb(n, 3) if n > 3 else float(sum(labels) > 0)
         samples_per_problem = max(samples_per_problem, len(row["generations"]))
     summary = {
         "benchmark": Path(path).stem,
@@ -131,6 +141,8 @@ def score_file(path):
     }
     if samples_per_problem > 1:
         summary[f"pass@{samples_per_problem}"] = solved / len(rows)
+        if samples_per_problem > 3:  # unbiased estimate of pass@3 from the n > 3 samples (Chen et al., 2021)
+            summary["pass@3"] = at_3 / len(rows)
     return summary
 
 

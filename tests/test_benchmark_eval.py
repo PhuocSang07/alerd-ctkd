@@ -81,3 +81,16 @@ def test_main_builds_training_prompts_and_writes_the_summary_the_tables_read(tmp
     assert summary[0]["n_problems"] == 4 and summary[0]["samples_per_problem"] == 3
     scores = load_scores(tmp_path / "results", "t-s42")
     assert scores[0] == pytest.approx((100.0, 100.0)) and scores[2] == pytest.approx((100.0, 100.0))
+
+
+def test_pass_at_3_is_estimated_without_bias_from_more_than_three_samples(tmp_path, monkeypatch):
+    monkeypatch.setattr(benchmark_eval, "label_generations", lambda texts, gold: [extract_boxed(t) == gold for t in texts])
+    right, wrong = "so \\boxed{7}", "so \\boxed{8}"
+    rows = [{"id": 0, "gold": "7", "generations": [{"text": t, "finish_reason": "stop", "n_tokens": 3}
+                                                   for t in (right, right, wrong, wrong, wrong)]},
+            {"id": 1, "gold": "7", "generations": [{"text": wrong, "finish_reason": "stop", "n_tokens": 3}] * 5}]
+    path = tmp_path / "aime24.jsonl"
+    path.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
+    summary = benchmark_eval.score_file(path)
+    assert summary["pass@5"] == pytest.approx(0.5)
+    assert summary["pass@3"] == pytest.approx((1 - 1 / 10 + 0.0) / 2)  # 1 - C(3,3)/C(5,3) for the first problem, 0 for the second
