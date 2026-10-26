@@ -19,6 +19,7 @@ from pathlib import Path
 from answer_scoring import extract_boxed
 
 PROBE = "\n\nTherefore, the final answer is \\boxed{"
+PROGRESS_CHUNK = 5000  # probes per generate() call; each call logs the progress
 
 
 def build_parser():
@@ -67,7 +68,13 @@ def main(argv=None):
     llm = LLM(model=args.model, dtype="bfloat16", gpu_memory_utilization=args.gpu_memory_utilization,
               max_model_len=args.max_model_len, enable_prefix_caching=True, enforce_eager=True,
               max_num_batched_tokens=args.max_num_batched_tokens, max_num_seqs=args.max_num_seqs)
-    outputs = llm.generate(prompts, SamplingParams(max_tokens=1, prompt_logprobs=0), use_tqdm=False)
+    outputs, sampling = [], SamplingParams(max_tokens=1, prompt_logprobs=0)
+    scoring_started = time.time()
+    for start in range(0, len(prompts), PROGRESS_CHUNK):  # chunked so the log shows progress and a remaining time
+        outputs += llm.generate(prompts[start:start + PROGRESS_CHUNK], sampling, use_tqdm=False)
+        done, elapsed = len(outputs), time.time() - scoring_started
+        print(f"progress {done:,}/{len(prompts):,} probes ({100 * done / len(prompts):.0f}%), {done / elapsed:.1f} probes/s, "
+              f"about {(len(prompts) - done) / (done / elapsed) / 60:.0f} min left", flush=True)
     print(f"scored {len(prompts):,} probes with {args.model} in {time.time() - started:.0f} s (model load included)")
 
     logp = {}  # (id, k) -> log p(answer | prefix up to step k)
