@@ -87,6 +87,22 @@ Steps marked **GPU** need a GPU (the rest run on CPU). Run them in this order.
    `SPAN_MODE=word` adds `work/<student>/spans-<teacher>.jsonl` and `work/<student>/span-gains.json`, the two signals per
    span (`student` for the CE weights, `diff` = teacher minus student for the KL weights). `LIMIT` writes to
    `<WORK_DIR>-limit<N>` and prints the probe counts and the wall time of each scoring run.
+   **Same-tokenizer training** (`span_kd_train.py`, GPU): off-policy LoRA distillation of the student on the response of the
+   data, loss `(1 - beta) * CE + beta * KD`, KD = forward KL on the teacher's top-k logits renormalised on that support
+   (times temperature^2), the recipe of RIVAD's off-policy mode. Every word span of a sample has a mass `omega_n`
+   (sum 1) shared equally by its tokens, separately for the CE and the KD term: `--ce-weights` / `--kd-weights` are
+   `token` (plain token mean), `uniform` (every span the same) or the ALERD Eq. 3-5 weights of the `student`, `teacher` or
+   `diff` span gains of `span-gains.json`. The EOS joins the last span. Defaults: beta 0.5, top-k 50, temperature 1,
+   LoRA rank 16 / alpha 16 / dropout 0.05 on all projections, lr 1e-4 (cosine to 1e-5), weight decay 0.01, clip 1.0,
+   effective batch 128, 3 epochs, seed 10, student / teacher token limits 1,024 / 2,560.
+   ```
+   python span_kd_train.py --train-data work/Qwen2.5-1.5B-Instruct/train-sra.jsonl \
+     --spans-file work/Qwen2.5-1.5B-Instruct/spans-Qwen2.5-14B-Instruct.jsonl \
+     --gains-file work/Qwen2.5-1.5B-Instruct/span-gains.json --student-model Qwen/Qwen2.5-1.5B-Instruct \
+     --teacher-model Qwen/Qwen2.5-14B-Instruct --ce-weights student --kd-weights diff --output-dir outputs/gain
+   modal run --detach scripts/modal_train_kd.py --work work-limit200   # token vs gain weights + GSM8K test
+   ```
+   The output directory is a merged bf16 HF checkpoint (evaluate it with `benchmark_eval.py`) with `train_stats.jsonl`.
 2. **Train** (GPU). Defaults: teacher layer 28 of Qwen2.5-7B (`TEACHER_LAYER`, `TEACHER_DIM=3584`), last layer of the
    student (48 for GPT2-XL, 16 for Llama-3.2-1B), 3 epochs, lr 5e-5 cosine to 1e-5, warm-up 10%, effective batch
    32 (8 x 4), `max_len` 512:
