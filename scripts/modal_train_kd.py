@@ -4,10 +4,11 @@
 
 Inputs are the outputs of scripts/modal_score_gain.py in the `alerd-ctkd-results` volume (train-sra.jsonl, the word-span
 index and span-gains.json of <work>). Every experiment of EXPERIMENTS runs on its own A100-80GB (train, then GSM8K test with
-benchmark_eval.py); the zero-shot student is evaluated once. Checkpoints stay in the container. Per experiment the volume gets
+benchmark_eval.py); the zero-shot student is evaluated once. The merged checkpoint of each experiment is copied to <work>/ckpt-<tag>/<name>/ (about 3 GB). Per experiment the volume gets
 <work>/train-<tag>/<name>/{train_stats.jsonl, spans.jsonl.gz, eval/, result.json}, and the entrypoint prints one table.
 """
 import json
+import shutil
 import subprocess
 import time
 
@@ -45,11 +46,15 @@ def run(command: list[str]) -> None:
     subprocess.run(command, cwd=REPO, env=env, check=True)
 
 
-def evaluate(model: str, name: str, student: str, n_samples: int, out: str) -> dict:
-    run(["python", "benchmark_eval.py", "--model", model, "--tag", name, "--base-model", student,
-         "--benchmarks", "gsm8k", "--n-samples", str(n_samples), "--results-dir", f"{out}/eval",
-         "--gpu-memory-utilization", "0.5"])
-    return json.load(open(f"{out}/eval/{name}/summary.json"))
+def evaluate(model: str, name: str, student: str, n_samples: int, out: str) -> list:
+    """GSM8K and MATH500 with n_samples generations per problem, AIME24 (30 problems) with 16: one summary row each."""
+    rows = []
+    for benchmarks, n in (("gsm8k,math500", n_samples), ("aime24", 16)):
+        run(["python", "benchmark_eval.py", "--model", model, "--tag", f"{name}-{benchmarks.split(',')[0]}",
+             "--base-model", student, "--benchmarks", benchmarks, "--n-samples", str(n), "--results-dir", f"{out}/eval",
+             "--gpu-memory-utilization", "0.5"])
+        rows += json.load(open(f"{out}/eval/{name}-{benchmarks.split(',')[0]}/summary.json"))
+    return rows
 
 
 def keep(out: str, work: str, tag: str, name: str, result: dict) -> None:
@@ -80,6 +85,10 @@ def experiment(work: str, student: str, teacher: str, tag: str, name: str, epoch
         command += ["--teacher-model", teacher]
     run(command)
     train_seconds = round(time.time() - started)  # model loading and the first download included
+    # the merged checkpoint (weights, config, tokenizer) outlives the container: evaluate it later with benchmark_eval.py
+    shutil.copytree(out, f"/root/results/{work}/ckpt-{tag}/{name}", dirs_exist_ok=True,
+                    ignore=shutil.ignore_patterns("eval", "spans.jsonl", "train_stats.jsonl"))
+    results.commit()
     rows = [json.loads(line) for line in open(f"{out}/train_stats.jsonl")]
     result = {"name": name, "ce_weights": ce, "kd_weights": kd, "beta": beta, "alloc_lambda": lam,
               "train_seconds": train_seconds, "steps": len(rows), "first": rows[0], "last": rows[-1],
@@ -109,10 +118,9 @@ def main(work: str = "work-limit1000", student: str = "Qwen/Qwen2.5-1.5B-Instruc
     calls = [experiment.spawn(work, student, teacher, tag, n, epochs, batch_size, micro_batch_size, kd_top_k,
                               learning_rate, eval_n_samples) for n in chosen]
     calls.append(zero_shot.spawn(work, student, tag, eval_n_samples))
-    print(f"{'name':16} {'pass@1':>7} {'pass@3':>7} {'ce_tok':>7} {'kd_tok':>7} {'secs':>6}")
+    print(f"{'name':16} " + " ".join(f"{b + ' p@1':>12} {'len':>6} {'trunc%':>6}" for b in ("gsm8k", "math500", "aime24")))
     for call in calls:
         r = call.get()
-        g = r["gsm8k"]  # benchmark_eval summary: a list with one row per benchmark
-        last = r.get("last", {})
-        print(f"{r['name']:16} {g[0]['pass@1']:7.4f} {g[0].get('pass@3', 0):7.4f} {last.get('ce_token', 0):7.3f} "
-              f"{last.get('kd_token', 0):7.3f} {r.get('train_seconds', 0):6}", flush=True)
+        by = {row["benchmark"]: row for row in r["gsm8k"]}
+        print(f"{r['name']:16} " + " ".join(f"{100 * by[b]['pass@1']:12.2f} {by[b]['length']:6.0f} "
+                                            f"{100 * by[b]['truncation_rate']:6.2f}" for b in by), flush=True)

@@ -4,7 +4,7 @@ r"""Generate with vLLM on GSM8K test and MATH500, grade with Math-Verify, write 
         --benchmarks gsm8k,math500 --n-samples 3 --temperature 0.6 --top-p 0.9 --repetition-penalty 1.05 ...
 
 * `gsm8k`: openai/gsm8k, config main, split test (1,319 problems), gold = the number after `####` without thousands
-  separators. `math500`: HuggingFaceH4/MATH-500, split test, gold = the `answer` column. Both use the same instruction.
+  separators. `math500`: HuggingFaceH4/MATH-500, split test, gold = the `answer` column. `aime24`: HuggingFaceH4/aime_2024 (30 problems), gold = the `answer` column. All use the same instruction.
 * Prompts come from prompts.build_prompt: the instruction as a user turn of the model's chat template when its tokenizer
   has one, the raw instruction otherwise (GPT-2). That is the prompt of the training data, so train and eval agree for
   both kinds of model. A prompt that does not fit the context stops the run before vLLM starts.
@@ -53,7 +53,14 @@ def load_math500():
                         "problem", "answer")
 
 
-BENCHMARKS = {"gsm8k": load_gsm8k, "math500": load_math500}
+def load_aime24():
+    from datasets import load_dataset
+
+    return math_records(load_dataset(dataset_path("HuggingFaceH4/aime_2024", "aime_2024"), split="train"),
+                        "problem", "answer")
+
+
+BENCHMARKS = {"gsm8k": load_gsm8k, "math500": load_math500, "aime24": load_aime24}
 
 
 def build_prompts(model_path, records, config):
