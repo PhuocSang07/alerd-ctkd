@@ -1,6 +1,7 @@
 r"""Build the SRA training jsonl from GSM8K.
 
     python prepare_sra_data.py clean --output work/gsm8k-clean.jsonl
+    python prepare_sra_data.py clean-s1k --output work/s1k-clean.jsonl        # s1K-1.1 instead of GSM8K
     python prepare_sra_data.py build --clean work/gsm8k-clean.jsonl --student-tokenizer <student> \
         --teacher-tokenizer <teacher> --output work/<student>/train-sra.jsonl
 
@@ -8,6 +9,10 @@ r"""Build the SRA training jsonl from GSM8K.
 per problem: the solution without the calculator annotations <<...>>, the `#### N` line replaced by the sentence
 `The final answer is \boxed{N}.` (thousands separators dropped from N), and `answer` = N, the target of the answer gain.
 Every line of the solution is a step; `step_char_ends` are the character ends of the lines inside `output`.
+
+`clean-s1k` reads simplescaling/s1K-1.1 and keeps, for every problem whose `deepseek_attempt` ends in a `\boxed{}`
+answer, the attempt itself (the final write-up after the long thinking, which is not used) as `output` and its last
+boxed answer as `answer`. A step is a paragraph: the text up to and including the line breaks that follow it.
 
 `build` wraps the question in each model's prompt (prompts.py): `prompt` for the student and `teacher_prompt` for the
 teacher. The output text is the same for every model. Prompt and output must tokenize independently: if a token of the
@@ -22,6 +27,7 @@ from pathlib import Path
 from allocation import last_boxed
 from prompts import build_prompt
 
+STEP = re.compile(r"[^\n]+\n*")
 CALCULATOR = re.compile(r"<<[^<>]*>>")
 NUMBER = re.compile(r"-?\d+(\.\d+)?")
 
@@ -61,6 +67,31 @@ def convert_row(row):
     return {"question": row["question"].strip(), "output": output, "answer": number, "step_char_ends": ends}
 
 
+def convert_s1k_row(row):
+    """{question, deepseek_attempt} of s1K-1.1 -> {question, output, answer, step_char_ends}."""
+    output = row["deepseek_attempt"].strip()
+    answer = last_boxed(output)
+    if not answer:
+        raise ValueError("the attempt has no final boxed answer")
+    return {"question": row["question"].strip(), "output": output, "answer": answer,
+            "step_char_ends": [m.end() for m in STEP.finditer(output)]}
+
+
+def clean_s1k_rows(rows):
+    kept, skipped = [], 0
+    for index, row in enumerate(rows):
+        try:
+            converted = convert_s1k_row(row)
+        except ValueError:
+            skipped += 1
+            continue
+        converted["id"] = index
+        kept.append(converted)
+    steps = [len(r["step_char_ends"]) for r in kept]
+    return kept, {"rows": len(kept), "skipped_without_boxed": skipped, "steps_median": statistics.median(steps),
+                  "steps_max": max(steps)}
+
+
 def clean_rows(rows):
     kept = []
     for index, row in enumerate(rows):
@@ -83,13 +114,20 @@ def check_boundary(tokenizer, prompt, output, label):
         raise ValueError(f"a {label} token straddles the prompt/output boundary")
 
 
-def build_rows(clean, student_tokenizer, teacher_tokenizer):
+def build_rows(clean, student_tokenizer, teacher_tokenizer, max_len=None, teacher_max_len=None):
+    """Rows with both prompts; with max_len / teacher_max_len, rows longer than that many tokens are dropped."""
     rows = []
     for row in clean:
         prompt = build_prompt(student_tokenizer, row["question"])
         teacher_prompt = build_prompt(teacher_tokenizer, row["question"])
         check_boundary(student_tokenizer, prompt, row["output"], "student")
         check_boundary(teacher_tokenizer, teacher_prompt, row["output"], "teacher")
+        if max_len is not None and len(student_tokenizer(prompt + row["output"], add_special_tokens=False
+                                                         )["input_ids"]) > max_len:
+            continue
+        if teacher_max_len is not None and len(teacher_tokenizer(
+                teacher_prompt + row["output"], add_special_tokens=False)["input_ids"]) > teacher_max_len:
+            continue
         rows.append({"id": row["id"], "question": row["question"], "answer": row["answer"], "prompt": prompt,
                      "teacher_prompt": teacher_prompt, "output": row["output"],
                      "step_char_ends": row["step_char_ends"]})
@@ -128,12 +166,24 @@ def main(argv=None):
     c.add_argument("--config", default="main")
     c.add_argument("--split", default="train")
     c.add_argument("--output", required=True)
+    s1k = sub.add_parser("clean-s1k")
+    s1k.add_argument("--dataset", default="simplescaling/s1K-1.1", help="HF id, snapshot dir or local jsonl")
+    s1k.add_argument("--split", default="train")
+    s1k.add_argument("--output", required=True)
     b = sub.add_parser("build")
     b.add_argument("--clean", required=True, help="output of the clean step")
     b.add_argument("--student-tokenizer", required=True)
     b.add_argument("--teacher-tokenizer", required=True)
+    b.add_argument("--max-len", type=int, help="drop rows longer than this many student tokens (prompt + output)")
+    b.add_argument("--teacher-max-len", type=int, help="drop rows longer than this many teacher tokens")
     b.add_argument("--output", required=True)
     args = parser.parse_args(argv)
+
+    if args.command == "clean-s1k":
+        kept, stats = clean_s1k_rows(load_rows(args.dataset, args.split, None))
+        write_jsonl(args.output, kept)
+        print(json.dumps(stats))
+        return
 
     if args.command == "clean":
         kept, stats = clean_rows(load_rows(args.dataset, args.split, args.config))
@@ -145,9 +195,10 @@ def main(argv=None):
 
     student = AutoTokenizer.from_pretrained(args.student_tokenizer, trust_remote_code=True)
     teacher = AutoTokenizer.from_pretrained(args.teacher_tokenizer, trust_remote_code=True)
-    rows = build_rows(read_jsonl(args.clean), student, teacher)
+    clean = read_jsonl(args.clean)
+    rows = build_rows(clean, student, teacher, args.max_len, args.teacher_max_len)
     write_jsonl(args.output, rows)
-    print(f"{len(rows)} samples -> {args.output}")
+    print(f"{len(rows)} samples -> {args.output} ({len(clean) - len(rows)} dropped as longer than the token limits)")
     print(length_stats(student, rows, "student"))
     print(length_stats(teacher, rows, "teacher"))
 

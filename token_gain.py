@@ -22,6 +22,8 @@ the sum over the tokens that end inside it, the same rule that assigns a span to
     python token_gain.py signals --spans work/spans.jsonl --student-gains <student gain-tokens> \
         --teacher-gains <teacher gain-tokens> --output work/span-gains.json
 
+    python token_gain.py merge --inputs <shard gain-tokens> ... --output <gain-tokens>   # scoring split into shards
+
 `signals` exports the two signals of the span-weighted losses per span, u^S (the student's span gain, for the CE weights)
 and u^T - u^S (teacher minus student, for the KL weights): {id: {"hash", "teacher_hash", "student", "teacher", "diff"}}.
 """
@@ -125,6 +127,20 @@ def span_signals(span_row, student_file, teacher_file):
             "teacher": gains["teacher"], "diff": [t - s for t, s in zip(gains["teacher"], gains["student"])]}
 
 
+def merge_gain_files(payloads):
+    """One gain-tokens payload from the shards of a split scoring run (same model, disjoint samples)."""
+    first = payloads[0]
+    samples = {}
+    for payload in payloads:
+        if (payload["model"], payload["tokenizer"]) != (first["model"], first["tokenizer"]):
+            raise ValueError("shards were scored by different models or tokenizers")
+        overlap = samples.keys() & payload["samples"].keys()
+        if overlap:
+            raise ValueError(f"{len(overlap)} samples occur in more than one shard, e.g. id {sorted(overlap)[0]}")
+        samples.update(payload["samples"])
+    return {"model": first["model"], "tokenizer": first["tokenizer"], "samples": samples}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -139,6 +155,9 @@ def main(argv=None):
     g.add_argument("--student-gains", required=True, help="gain-tokens json of the student (pack)")
     g.add_argument("--teacher-gains", required=True, help="gain-tokens json of the teacher (pack)")
     g.add_argument("--output", required=True)
+    m = sub.add_parser("merge", help="merge the gain-tokens files of the shards of one scoring run")
+    m.add_argument("--inputs", nargs="+", required=True)
+    m.add_argument("--output", required=True)
     p = sub.add_parser("pack")
     p.add_argument("--records", required=True)
     p.add_argument("--gains", required=True, help="output of answer_gain.py")
@@ -164,6 +183,17 @@ def main(argv=None):
         with open(args.output, "w", encoding="utf-8", newline="\n") as handle:
             json.dump(signals, handle)
         print(f"wrote span gains of {len(signals)} samples -> {args.output}")
+        return
+
+    if args.command == "merge":
+        payloads = []
+        for path in args.inputs:
+            with open(path, encoding="utf-8") as handle:
+                payloads.append(json.load(handle))
+        merged = merge_gain_files(payloads)
+        with open(args.output, "w", encoding="utf-8", newline="\n") as handle:
+            json.dump(merged, handle)
+        print(f"merged {len(args.inputs)} files, {len(merged['samples'])} samples -> {args.output}")
         return
 
     with open(args.gains, encoding="utf-8") as handle:
