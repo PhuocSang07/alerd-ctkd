@@ -122,7 +122,7 @@ class SpanKDCollator:
         teacher = self._encode(self.teacher_tokenizer, [i["teacher_full"] for i in items], self.teacher_max_len) \
             if self.needs_teacher else None
         eos = self.student_tokenizer.eos_token_id
-        columns = {k: [] for k in ("s_b", "s_p", "t_b", "t_p", "labels", "w_ce", "w_kd")}
+        columns = {k: [] for k in ("s_b", "s_p", "t_b", "t_p", "span", "labels", "w_ce", "w_kd")}
         for b, item in enumerate(items):
             ids = student["input_ids"][b]
             lengths = [(int(student["attention_mask"][b].sum()), item["student_tokens"][-1][1], "student")]
@@ -141,6 +141,7 @@ class SpanKDCollator:
                     columns["s_p"].append(sa - 1 + k)
                     columns["t_b"].append(b)
                     columns["t_p"].append(ta - 1 + k)
+                    columns["span"].append(n)
                     columns["labels"].append(int(ids[sa + k]) if k < sb - sa else eos)
                     columns["w_ce"].append(item["omega_ce"][n] / count)
                     columns["w_kd"].append(item["omega_kd"][n] / count)
@@ -160,16 +161,41 @@ def distill_terms(student_logits, teacher_logits, labels, top_k, temperature):
     return ce, kl
 
 
-def weighted_loss(batch, student_logits, teacher_logits, beta, top_k, temperature):
-    """(1 - beta) * CE + beta * KD with the masses of the collator; per-sample sums of mass 1, mean over samples."""
+def weighted_loss(batch, student_logits, teacher_logits, beta, top_k, temperature, keep=None):
+    """(1 - beta) * CE + beta * KD with the masses of the collator; per-sample sums of mass 1, mean over samples.
+
+    `keep`, a dict, receives the detached per-token `ce` and `kd` (for dump_span_rows)."""
     ce, kl = distill_terms(student_logits, teacher_logits, batch["labels"], top_k, temperature) \
         if teacher_logits is not None else (F.cross_entropy(student_logits, batch["labels"], reduction="none"), None)
     n = batch["n_samples"]
+    if keep is not None:
+        keep.update(ce=ce.detach(), kd=None if kl is None else kl.detach())
     ce_loss = (batch["w_ce"] * ce).sum() / n
     kd_loss = ce_loss.new_zeros(()) if kl is None else (batch["w_kd"] * kl).sum() / n
     stats = {"ce": ce_loss.item(), "kd": kd_loss.item(), "ce_token": ce.mean().item(),
              "kd_token": 0.0 if kl is None else kl.mean().item()}
     return (1.0 - beta) * ce_loss + beta * kd_loss, stats
+
+
+def dump_span_rows(handle, batch, terms, epoch, step):
+    """One jsonl row per span of the batch: the mean CE and KD of its tokens and the masses it carries in each loss.
+
+    Rows of one optimizer step share `step`; `n` is the span's token count (the last span counts its EOS)."""
+    width = int(batch["span"].max()) + 1
+    key = (batch["s_b"] * width + batch["span"]).cpu()
+    unique, inverse = key.unique(return_inverse=True)
+    count = torch.zeros(len(unique)).index_add_(0, inverse, torch.ones_like(key, dtype=torch.float32))
+
+    def mean(values):
+        return (torch.zeros(len(unique)).index_add_(0, inverse, values.float().cpu()) / count).tolist()
+
+    ce, w_ce, w_kd = mean(terms["ce"]), mean(batch["w_ce"]), mean(batch["w_kd"])
+    kd = None if terms["kd"] is None else mean(terms["kd"])
+    for j, k in enumerate(unique.tolist()):
+        row = {"epoch": epoch, "step": step, "id": batch["ids"][k // width], "span": k % width, "n": int(count[j]),
+               "ce": ce[j], "kd": None if kd is None else kd[j],
+               "omega_ce": w_ce[j] * count[j].item(), "omega_kd": w_kd[j] * count[j].item()}
+        handle.write(json.dumps(row) + "\n")
 
 
 def load_models(args, device):
@@ -247,6 +273,7 @@ def train(args):
         window.clear()
 
     use_amp = device.type == "cuda"
+    dump = open(args.dump_spans, "w", encoding="utf-8") if args.dump_spans else None
     for epoch in range(args.epochs):
         micro = 0
         for batch in loader:
@@ -260,11 +287,14 @@ def train(args):
                             batch["t_b"], batch["t_p"]][:, :vocab].float()
                 student_logits = student(**batch["student"], use_cache=False).logits[
                     batch["s_b"], batch["s_p"]][:, :vocab].float()
+                terms = {}
                 loss, stats = weighted_loss(batch, student_logits, teacher_logits, args.kd_beta, args.kd_top_k,
-                                            args.temperature)
+                                            args.temperature, terms)
             if not torch.isfinite(loss):
                 raise FloatingPointError(f"non-finite loss at step {step}: {stats}")
             (loss / accum).backward()
+            if dump:
+                dump_span_rows(dump, batch, terms, epoch, step + 1)
             window.append({"loss": loss.item(), **stats})
             micro += 1
             if micro % accum == 0:
@@ -272,6 +302,8 @@ def train(args):
         if micro % accum:  # flush the last partial accumulation window
             optimizer_step()
 
+    if dump:
+        dump.close()
     merged = student.merge_and_unload().to(torch.bfloat16 if device.type == "cuda" else torch.float32)
     merged.save_pretrained(args.output_dir)
     student_tokenizer.save_pretrained(args.output_dir)
@@ -313,6 +345,7 @@ def parse_args(argv=None):
     p.add_argument("--teacher-dtype", choices=("float32", "bfloat16"), default="bfloat16")
     p.add_argument("--device", default=None)
     p.add_argument("--seed", type=int, default=10)
+    p.add_argument("--dump-spans", help="write one jsonl row per span and micro batch: mean CE / KD and the masses")
     args = p.parse_args(argv)
     if not 0.0 <= args.kd_beta <= 1.0:
         p.error("--kd-beta must be in [0, 1]")

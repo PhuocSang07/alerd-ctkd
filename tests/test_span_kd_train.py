@@ -262,3 +262,24 @@ def test_beta_zero_trains_without_loading_a_teacher(workspace, tmp_path):
 def test_a_teacher_is_required_unless_beta_is_zero(workspace, tmp_path):
     with pytest.raises(SystemExit):
         main(cli(workspace, tmp_path / "x", **{"teacher-model": None}))
+
+
+def test_the_span_dump_has_one_row_per_span_and_sample_and_epoch(workspace, tmp_path):
+    out, dump = tmp_path / "run", tmp_path / "spans.jsonl"
+    main(cli(workspace, out, **{"dump-spans": dump}))
+    rows = [json.loads(line) for line in dump.read_text().splitlines()]
+    index = {r["id"]: r for r in workspace["index"]}
+    assert {r["epoch"] for r in rows} == {0, 1}
+    for epoch in (0, 1):
+        for rid, span in index.items():
+            mine = [r for r in rows if r["epoch"] == epoch and r["id"] == rid]
+            assert [r["span"] for r in mine] == list(range(len(span["student_tokens"])))
+            assert sum(r["n"] for r in mine) == span["student_tokens"][-1][1] - span["student_tokens"][0][0] + 1
+            assert sum(r["omega_ce"] for r in mine) == pytest.approx(1.0)
+            assert sum(r["omega_kd"] for r in mine) == pytest.approx(1.0)
+            assert all(r["ce"] > 0 and r["kd"] >= 0 for r in mine)
+    # the span means rebuild the CE the trainer logged: sum_n omega_n * ce_n averaged over the samples of a step
+    first = [r for r in rows if r["epoch"] == 0 and r["step"] == 1]
+    ids = {r["id"] for r in first}
+    ce = sum(r["omega_ce"] * r["ce"] for r in first) / len(ids)
+    assert ce == pytest.approx(read_stats(out)[0]["ce"], rel=1e-4)
