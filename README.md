@@ -103,6 +103,8 @@ Steps marked **GPU** need a GPU (the rest run on CPU). Run them in this order.
    modal run --detach scripts/modal_train_kd.py --work work-limit200   # token vs gain weights + GSM8K test
    ```
    The output directory is a merged bf16 HF checkpoint (evaluate it with `benchmark_eval.py`) with `train_stats.jsonl`.
+   `scripts/span_kd_run_all.sh` chains scoring, the five default experiments and the evaluation on one machine;
+   setup, results and costs are in `docs/span-kd-experiments.md`.
 2. **Train** (GPU). Defaults: teacher layer 28 of Qwen2.5-7B (`TEACHER_LAYER`, `TEACHER_DIM=3584`), last layer of the
    student (48 for GPT2-XL, 16 for Llama-3.2-1B), 3 epochs, lr 5e-5 cosine to 1e-5, warm-up 10%, effective batch
    32 (8 x 4), `max_len` 512:
