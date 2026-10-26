@@ -89,7 +89,7 @@ GSM8K test pass@1 (1.024 token) và ba bộ khó (4096 token), pass@1 / pass@3, 
 Nhận xét (chỉ những điều số liệu hỗ trợ):
 
 - Mọi cấu hình train đều thấp hơn zero-shot; SFT thuần giảm nhiều nhất (MATH500 32,3), thêm KD giữ lại phần lớn (khoảng 49-51). Độ dài sinh giảm theo: GSM8K từ 310 token (zero-shot) xuống 97 (SFT) và khoảng 195-222 (KD). Giả thuyết: lời giải GSM8K ngắn kéo model về lối viết ngắn; chưa kiểm chứng bằng dữ liệu do teacher sinh.
-- Các cấu hình KD sát nhau (GSM8K 68,5-70,5; MATH500 49,1-51,3). Chạy lặp lại cùng cấu hình cho GSM8K lệch 0,2-0,6 điểm, và sai số chuẩn của một seed cỡ 1 điểm, nên **chưa kết luận được** trọng số gain tốt hơn token hay uniform. AIME24/25 chỉ đúng 0-3% trên 30 bài, các khác biệt là nhiễu.
+- Các cấu hình KD sát nhau (GSM8K 68,5-70,5; MATH500 49,1-51,3). Chạy lặp lại cùng cấu hình cho GSM8K lệch từ 0 đến 0,6 điểm, và sai số chuẩn của một seed cỡ 1 điểm, nên **chưa kết luận được** trọng số gain tốt hơn token hay uniform. AIME24/25 chỉ đúng 0-3% trên 30 bài, các khác biệt là nhiễu.
 - Tín hiệu lúc train (log mỗi span của `kd-token`, 69.922 span): CE và KD của span tương quan 0,36; KD gần như không tương quan với gain `diff` (−0,02); span có gain student cao có CE cao hơn (nhóm thấp nhất 0,44, nhóm cao nhất 0,83), span có `diff` cao có CE thấp hơn (0,72 xuống 0,53). CE trung bình giảm 0,641 → 0,563 và KD 0,372 → 0,313 qua 3 epoch.
 
 ## 6. Chi phí đã đo và những việc chưa xong
