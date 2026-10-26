@@ -40,20 +40,28 @@ EXPERIMENTS = {
 }
 
 
+# the default set: the baseline, the SFT reference and the gain weights on the CE, on the KD and on both
+DEFAULT_NAMES = ["sft", "kd-token", "gain-ce", "gain-kd", "gain-both"]
+BENCHMARKS = ("gsm8k", "math500", "aime24", "aime25")
+MAX_PARALLEL = 2  # GPUs in use at the same time
+
+
 def run(command: list[str]) -> None:
     print("+", " ".join(command), flush=True)
     env = {"PATH": "/usr/local/bin:/usr/bin:/bin", "HF_HOME": "/root/.cache/huggingface", "PYTHONUNBUFFERED": "1"}
     subprocess.run(command, cwd=REPO, env=env, check=True)
 
 
-def evaluate(model: str, name: str, student: str, n_samples: int, out: str) -> list:
-    """GSM8K and MATH500 with n_samples generations per problem, AIME24 (30 problems) with 16: one summary row each."""
+def evaluate(model: str, name: str, student: str, n_samples: int, out: str, max_tokens: int) -> list:
+    """GSM8K and MATH500 with n_samples generations per problem, AIME24 and AIME25 (30 problems each) with 16."""
     rows = []
-    for benchmarks, n in (("gsm8k,math500", n_samples), ("aime24", 16)):
-        run(["python", "benchmark_eval.py", "--model", model, "--tag", f"{name}-{benchmarks.split(',')[0]}",
-             "--base-model", student, "--benchmarks", benchmarks, "--n-samples", str(n), "--results-dir", f"{out}/eval",
+    for benchmarks, n in (("gsm8k,math500", n_samples), ("aime24,aime25", 16)):
+        suite = benchmarks.split(",")[0]
+        run(["python", "benchmark_eval.py", "--model", model, "--tag", f"{name}-{suite}", "--base-model", student,
+             "--benchmarks", benchmarks, "--n-samples", str(n), "--max-tokens", str(max_tokens),
+             "--max-model-len", str(max_tokens + 2048), "--results-dir", f"{out}/eval",
              "--gpu-memory-utilization", "0.5"])
-        rows += json.load(open(f"{out}/eval/{name}-{benchmarks.split(',')[0]}/summary.json"))
+        rows += json.load(open(f"{out}/eval/{name}-{suite}/summary.json"))
     return rows
 
 
@@ -68,9 +76,10 @@ def keep(out: str, work: str, tag: str, name: str, result: dict) -> None:
 
 
 @app.function(image=image, gpu="A100-80GB", volumes={"/root/.cache/huggingface": cache, "/root/results": results},
-              timeout=6 * 3600)
+              timeout=6 * 3600, max_containers=MAX_PARALLEL)
 def experiment(work: str, student: str, teacher: str, tag: str, name: str, epochs: int, batch_size: int,
-               micro_batch_size: int, kd_top_k: int, learning_rate: float, eval_n_samples: int) -> dict:
+               micro_batch_size: int, kd_top_k: int, learning_rate: float, eval_n_samples: int,
+               max_tokens: int) -> dict:
     ce, kd, beta, lam = EXPERIMENTS[name]
     data = f"/root/results/{work}/{student.split('/')[-1]}"
     out = f"/root/run/{name}"
@@ -92,16 +101,16 @@ def experiment(work: str, student: str, teacher: str, tag: str, name: str, epoch
     rows = [json.loads(line) for line in open(f"{out}/train_stats.jsonl")]
     result = {"name": name, "ce_weights": ce, "kd_weights": kd, "beta": beta, "alloc_lambda": lam,
               "train_seconds": train_seconds, "steps": len(rows), "first": rows[0], "last": rows[-1],
-              "gsm8k": evaluate(out, name, student, eval_n_samples, out)}
+              "gsm8k": evaluate(out, name, student, eval_n_samples, out, max_tokens)}
     keep(out, work, tag, name, result)
     return result
 
 
 @app.function(image=image, gpu="A100-80GB", volumes={"/root/.cache/huggingface": cache, "/root/results": results},
               timeout=2 * 3600)
-def zero_shot(work: str, student: str, tag: str, eval_n_samples: int) -> dict:
+def zero_shot(work: str, student: str, tag: str, eval_n_samples: int, max_tokens: int) -> dict:
     out = "/root/run/zero-shot"
-    result = {"name": "zero-shot", "gsm8k": evaluate(student, "zero-shot", student, eval_n_samples, out)}
+    result = {"name": "zero-shot", "gsm8k": evaluate(student, "zero-shot", student, eval_n_samples, out, max_tokens)}
     folder = f"/root/results/{work}/train-{tag}/zero-shot"
     subprocess.run(f"mkdir -p {folder} && cp -r {out}/eval {folder}/", shell=True, check=True)
     json.dump(result, open(f"{folder}/result.json", "w"), indent=2)
@@ -110,17 +119,20 @@ def zero_shot(work: str, student: str, tag: str, eval_n_samples: int) -> dict:
 
 
 @app.local_entrypoint()
-def main(work: str = "work-limit1000", student: str = "Qwen/Qwen2.5-1.5B-Instruct",
-         teacher: str = "Qwen/Qwen2.5-14B-Instruct", tag: str = "e1k", names: str = "", epochs: int = 3,
-         batch_size: int = 32, micro_batch_size: int = 8, kd_top_k: int = 50, learning_rate: float = 1e-4,
-         eval_n_samples: int = 3):
-    chosen = [n for n in (names.split(",") if names else EXPERIMENTS) if n]
+def main(work: str = "work-s1k", student: str = "Qwen/Qwen2.5-1.5B-Instruct",
+         teacher: str = "Qwen/Qwen2.5-14B-Instruct", tag: str = "s1k", names: str = "", epochs: int = 3,
+         batch_size: int = 32, micro_batch_size: int = 4, kd_top_k: int = 50, learning_rate: float = 1e-4,
+         eval_n_samples: int = 3, max_tokens: int = 4096, with_zero_shot: bool = False):
+    chosen = [n for n in (names.split(",") if names else DEFAULT_NAMES) if n]
     calls = [experiment.spawn(work, student, teacher, tag, n, epochs, batch_size, micro_batch_size, kd_top_k,
-                              learning_rate, eval_n_samples) for n in chosen]
-    calls.append(zero_shot.spawn(work, student, tag, eval_n_samples))
-    print(f"{'name':16} " + " ".join(f"{b + ' p@1':>12} {'len':>6} {'trunc%':>6}" for b in ("gsm8k", "math500", "aime24")))
+                              learning_rate, eval_n_samples, max_tokens) for n in chosen]
+    if with_zero_shot:
+        calls.append(zero_shot.spawn(work, student, tag, eval_n_samples, max_tokens))
+    print(f"at most {MAX_PARALLEL} GPUs at a time; results land in {work}/train-{tag}/<name>/ of the volume", flush=True)
+    print(f"{'name':15} " + " ".join(f"{b + ' p@1':>12} {'p@3':>6} {'len':>6} {'trunc%':>6}" for b in BENCHMARKS))
     for call in calls:
         r = call.get()
         by = {row["benchmark"]: row for row in r["gsm8k"]}
-        print(f"{r['name']:16} " + " ".join(f"{100 * by[b]['pass@1']:12.2f} {by[b]['length']:6.0f} "
-                                            f"{100 * by[b]['truncation_rate']:6.2f}" for b in by), flush=True)
+        print(f"{r['name']:15} " + " ".join(
+            f"{100 * by[b]['pass@1']:12.2f} {100 * by[b].get('pass@3', 0):6.2f} {by[b]['length']:6.0f} "
+            f"{100 * by[b]['truncation_rate']:6.2f}" for b in BENCHMARKS), flush=True)
