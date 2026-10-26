@@ -97,16 +97,28 @@ def merge(dataset: str, limit: int, shards: int, student: str, teacher: str, max
     return {"samples": len(rows), **gain_stats(f"{out}/span-gains.json")}
 
 
+@app.function(image=image, volumes={"/root/results": results}, timeout=8 * 3600)
+def run_sharded(limit: int, student: str, teacher: str, utilization: float, dataset: str, shards: int,
+                max_len: int) -> dict:
+    """Scores the shards on parallel GPUs and merges them; running remotely, it outlives the local client."""
+    calls = [score.spawn(limit, student, teacher, utilization, dataset, f"{i}/{shards}") for i in range(shards)]
+    reports = [call.get() for call in calls]
+    if any(report["returncode"] for report in reports):
+        return {"failed": reports}
+    summary = {"shards": reports, "merged": merge.remote(dataset, limit, shards, student, teacher, max_len)}
+    path = f"/root/results/{base_name(dataset, limit)}/sharded-run.json"
+    json.dump(summary, open(path, "w"), indent=2)
+    results.commit()
+    return summary
+
+
 @app.local_entrypoint()
 def main(limit: int = 0, student: str = "Qwen/Qwen2.5-1.5B-Instruct", teacher: str = "Qwen/Qwen2.5-14B-Instruct",
          utilization: float = 0.85, dataset: str = "gsm8k", shards: int = 1, max_len: int = 0):
     if shards <= 1:
         print(json.dumps(score.remote(limit, student, teacher, utilization, dataset), indent=2))
         return
-    calls = [score.spawn(limit, student, teacher, utilization, dataset, f"{i}/{shards}") for i in range(shards)]
-    reports = [call.get() for call in calls]
-    print(json.dumps(reports, indent=2))
-    if any(report["returncode"] for report in reports):
-        raise SystemExit("a shard failed; the merge was not run")
-    print(json.dumps(merge.remote(dataset, limit, shards, student, teacher,
-                                  max_len or (1024 if dataset == "s1k" else 512)), indent=2))
+    call = run_sharded.spawn(limit, student, teacher, utilization, dataset, shards,
+                             max_len or (1024 if dataset == "s1k" else 512))
+    print(f"started {call.object_id}; the result lands in {base_name(dataset, limit)}/sharded-run.json of the "
+          "alerd-ctkd-results volume (run with --detach, the client may exit)")
