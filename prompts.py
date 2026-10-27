@@ -16,12 +16,16 @@ def has_chat_template(tokenizer):
     return bool(getattr(tokenizer, "chat_template", None))
 
 
-def build_prompt(tokenizer, question):
-    """Raw instruction for tokenizers without a chat template, else the instruction as one templated user turn."""
-    instruction = INSTRUCTION.format(question=question)
+def wrap_user(tokenizer, content):
+    """One user turn in the tokenizer's chat template (raw text when it has none)."""
     if not has_chat_template(tokenizer):
-        return instruction
+        return content
     template = tokenizer.chat_template if isinstance(tokenizer.chat_template, str) else ""
     extra = {"date_string": FIXED_DATE} if "date_string" in template else {}
-    return tokenizer.apply_chat_template([{"role": "user", "content": instruction}], tokenize=False,
+    return tokenizer.apply_chat_template([{"role": "user", "content": content}], tokenize=False,
                                          add_generation_prompt=True, enable_thinking=False, **extra)
+
+
+def build_prompt(tokenizer, question):
+    """Raw instruction for tokenizers without a chat template, else the instruction as one templated user turn."""
+    return wrap_user(tokenizer, INSTRUCTION.format(question=question))

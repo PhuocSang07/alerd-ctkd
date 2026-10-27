@@ -25,9 +25,12 @@ import statistics
 from pathlib import Path
 
 from allocation import last_boxed
-from prompts import build_prompt
+from prompts import build_prompt, wrap_user
 
 STEP = re.compile(r"[^\n]+\n*")
+MATH_COT_PREFIX = "Solve the following math problem step-by-step."
+TSDKD_DATASET = "Minsang/TSD-KD-Qwen2.5-14B-Instruct-Gen"
+TSDKD_FILE = "Qwen2.5-14B-Instruct_train_all.jsonl"
 CALCULATOR = re.compile(r"<<[^<>]*>>")
 NUMBER = re.compile(r"-?\d+(\.\d+)?")
 
@@ -77,6 +80,39 @@ def convert_s1k_row(row):
             "step_char_ends": [m.end() for m in STEP.finditer(output)]}
 
 
+def convert_tsdkd_row(row):
+    """TSD-KD release row {prompt: [user turn], response} -> {user_prompt, question, output, answer, step_char_ends}.
+
+    The release's own user turn is the prompt (no extra instruction); the teacher's response is the training output.
+    """
+    user_prompt = row["prompt"][0]["content"].strip()
+    output = row["response"].strip()
+    answer = last_boxed(output)
+    if not answer:
+        raise ValueError("the response has no final boxed answer")
+    return {"user_prompt": user_prompt, "question": user_prompt, "output": output, "answer": answer,
+            "step_char_ends": [m.end() for m in STEP.finditer(output)]}
+
+
+def clean_tsdkd_rows(rows):
+    """Keep the Math CoT rows (by instruction prefix) that end in a boxed answer; ids are the original row numbers."""
+    kept, counts = [], {"rows": 0, "math_cot": 0, "without_boxed": 0}
+    for index, row in enumerate(rows):
+        counts["rows"] += 1
+        if not row["prompt"][0]["content"].lstrip().startswith(MATH_COT_PREFIX):
+            continue
+        counts["math_cot"] += 1
+        try:
+            converted = convert_tsdkd_row(row)
+        except ValueError:
+            counts["without_boxed"] += 1
+            continue
+        converted["id"] = index
+        kept.append(converted)
+    steps = [len(r["step_char_ends"]) for r in kept]
+    return kept, {**counts, "kept": len(kept), "steps_median": statistics.median(steps), "steps_max": max(steps)}
+
+
 def clean_s1k_rows(rows):
     kept, skipped = [], 0
     for index, row in enumerate(rows):
@@ -118,8 +154,12 @@ def build_rows(clean, student_tokenizer, teacher_tokenizer, max_len=None, teache
     """Rows with both prompts; with max_len / teacher_max_len, rows longer than that many tokens are dropped."""
     rows = []
     for row in clean:
-        prompt = build_prompt(student_tokenizer, row["question"])
-        teacher_prompt = build_prompt(teacher_tokenizer, row["question"])
+        if "user_prompt" in row:  # the dataset brings its own instruction: no extra wrapper text
+            prompt = wrap_user(student_tokenizer, row["user_prompt"])
+            teacher_prompt = wrap_user(teacher_tokenizer, row["user_prompt"])
+        else:
+            prompt = build_prompt(student_tokenizer, row["question"])
+            teacher_prompt = build_prompt(teacher_tokenizer, row["question"])
         check_boundary(student_tokenizer, prompt, row["output"], "student")
         check_boundary(teacher_tokenizer, teacher_prompt, row["output"], "teacher")
         if max_len is not None and len(student_tokenizer(prompt + row["output"], add_special_tokens=False
@@ -170,6 +210,9 @@ def main(argv=None):
     s1k.add_argument("--dataset", default="simplescaling/s1K-1.1", help="HF id, snapshot dir or local jsonl")
     s1k.add_argument("--split", default="train")
     s1k.add_argument("--output", required=True)
+    tsd = sub.add_parser("clean-tsdkd")
+    tsd.add_argument("--dataset", default=TSDKD_DATASET, help="HF dataset id or a local jsonl of the release")
+    tsd.add_argument("--output", required=True)
     b = sub.add_parser("build")
     b.add_argument("--clean", required=True, help="output of the clean step")
     b.add_argument("--student-tokenizer", required=True)
@@ -178,6 +221,17 @@ def main(argv=None):
     b.add_argument("--teacher-max-len", type=int, help="drop rows longer than this many teacher tokens")
     b.add_argument("--output", required=True)
     args = parser.parse_args(argv)
+
+    if args.command == "clean-tsdkd":
+        path = args.dataset
+        if not Path(path).is_file():
+            from huggingface_hub import hf_hub_download
+
+            path = hf_hub_download(args.dataset, TSDKD_FILE, repo_type="dataset")
+        kept, stats = clean_tsdkd_rows(read_jsonl(path))
+        write_jsonl(args.output, kept)
+        print(json.dumps(stats))
+        return
 
     if args.command == "clean-s1k":
         kept, stats = clean_s1k_rows(load_rows(args.dataset, args.split, None))

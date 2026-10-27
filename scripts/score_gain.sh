@@ -14,7 +14,8 @@
 # span-gains.json: the student's span gains (for the CE weights) and teacher minus student (for the KL weights).
 # LIMIT=N keeps the first N problems, writes to WORK_DIR-limitN and skips predictability: a cost measurement. The number
 # of probes is printed by token_gain.py / span_index.py, the wall time of each scoring run by answer_gain.py and below.
-# DATASET=s1k scores s1K-1.1 (the deepseek_attempt write-ups, MAX_LEN 1024 tokens) instead of GSM8K. SHARD=i/n scores every
+# DATASET=s1k scores s1K-1.1 (the deepseek_attempt write-ups, MAX_LEN 1024 tokens) instead of GSM8K. DATASET=tsdkd scores the Math CoT rows of the TSD-KD
+# release (its own prompt, the teacher response as output, 1024 tokens; TSDKD_FILE=<local jsonl> skips the download). SHARD=i/n scores every
 # n-th row (starting at i) into WORK_DIR-shard<i>of<n> and stops after the two gain-tokens files: scripts/modal_score_gain.py
 # runs the shards in parallel and merges them (token_gain.py merge), then builds the span index and the signals.
 set -euo pipefail
@@ -31,8 +32,9 @@ LIMIT=${LIMIT:-}
 TEACHER_MAX_LEN=${TEACHER_MAX_LEN:-2560}
 PYTHON=${PYTHON:-python}
 [[ -z "${SPAN_MODE}" || "${SPAN_MODE}" == word ]] || { echo "SPAN_MODE must be empty or word" >&2; exit 2; }
-[[ "${DATASET}" == gsm8k || "${DATASET}" == s1k ]] || { echo "DATASET must be gsm8k or s1k" >&2; exit 2; }
-if [[ "${DATASET}" == s1k ]]; then MAX_LEN=${MAX_LEN:-1024}; else MAX_LEN=${MAX_LEN:-512}; fi
+[[ "${DATASET}" == gsm8k || "${DATASET}" == s1k || "${DATASET}" == tsdkd ]] || { echo "DATASET must be gsm8k, s1k or tsdkd" >&2; exit 2; }
+if [[ "${DATASET}" == gsm8k ]]; then MAX_LEN=${MAX_LEN:-512}; else MAX_LEN=${MAX_LEN:-1024}; fi
+[[ "${DATASET}" != tsdkd ]] || TEACHER_MAX_LEN=${TEACHER_MAX_LEN_TSDKD:-1024}  # same tokenizer, same limit as the student
 [[ -z "${SHARD}" || "${SHARD}" =~ ^[0-9]+/[1-9][0-9]*$ ]] || { echo "SHARD must look like 0/6" >&2; exit 2; }
 [[ -z "${SHARD}" || "${SHARD%/*}" -lt "${SHARD#*/}" ]] || { echo "SHARD index must be below the shard count" >&2; exit 2; }
 [[ -z "${LIMIT}" ]] || WORK_DIR="${WORK_DIR}-limit${LIMIT}"
@@ -57,6 +59,8 @@ score() {  # score <model> <side: student|teacher> <data jsonl> <out dir>; write
 mkdir -p "${WORK_DIR}"
 if [[ "${DATASET}" == s1k ]]; then
   "${PYTHON}" prepare_sra_data.py clean-s1k --output "${CLEAN}"
+elif [[ "${DATASET}" == tsdkd ]]; then
+  "${PYTHON}" prepare_sra_data.py clean-tsdkd ${TSDKD_FILE:+--dataset "${TSDKD_FILE}"} --output "${CLEAN}"
 else
   "${PYTHON}" prepare_sra_data.py clean --output "${CLEAN}"
 fi
@@ -71,7 +75,7 @@ for student in ${STUDENTS}; do
   out="${WORK_DIR}/${tag}"
   mkdir -p "${out}"
   build_limits=()
-  [[ "${DATASET}" == s1k ]] && build_limits=(--max-len "${MAX_LEN}" --teacher-max-len "${TEACHER_MAX_LEN}")
+  [[ "${DATASET}" != gsm8k ]] && build_limits=(--max-len "${MAX_LEN}" --teacher-max-len "${TEACHER_MAX_LEN}")
   "${PYTHON}" prepare_sra_data.py build --clean "${CLEAN}" --student-tokenizer "${student}" \
     --teacher-tokenizer "${TEACHER}" "${build_limits[@]}" --output "${out}/train-sra.jsonl"
   if [[ -n "${SHARD}" ]]; then  # every n-th row of the (filtered) training file

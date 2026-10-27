@@ -80,6 +80,18 @@ def test_evaluation_needs_the_checkpoints(tmp_path):
     assert result.returncode == 2 and "span_kd_train.sh" in result.stderr
 
 
+def test_run_all_on_the_tsdkd_math_data_trains_two_epochs_with_batch_64(tmp_path):
+    data = tmp_path / "w-tsdkd-limit50" / "Qwen2.5-1.5B-Instruct"
+    data.mkdir(parents=True)
+    for name in ("train-sra.jsonl", "spans-Qwen2.5-14B-Instruct.jsonl", "span-gains.json"):
+        (data / name).write_text("{}")
+    env = {"DATASET": "tsdkd", "LIMIT": "50", "SKIP_SCORING": "1", "EXPERIMENTS": "gain-both",
+           "WORK_ROOT": str(tmp_path / "w"), "OUT_ROOT": str(tmp_path / "out"), "RESULTS_DIR": str(tmp_path / "res")}
+    result = run("span_kd_run_all.sh", env, check=False)
+    [line] = commands(result, "span_kd_train.py")
+    assert flag(line, "--epochs") == "2" and flag(line, "--batch-size") == "64" and flag(line, "--micro-batch-size") == "4"
+
+
 def test_run_all_scores_with_word_spans_then_trains_then_evaluates(tmp_path):
     (tmp_path / "w-s1k-limit50").mkdir()
     (tmp_path / "w-s1k-limit50" / "s1k-clean.jsonl").write_text("{}\n" * 60)

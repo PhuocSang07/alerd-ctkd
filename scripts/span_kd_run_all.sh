@@ -1,7 +1,7 @@
 #!/bin/bash
 # Whole pipeline on one machine: answer-gain scoring -> five training runs -> evaluation.
 #
-# Usage: [DATASET=gsm8k|s1k] [LIMIT=1000] [EXPERIMENTS="..."] [SKIP_SCORING=1] bash scripts/span_kd_run_all.sh
+# Usage: [DATASET=gsm8k|s1k|tsdkd] [LIMIT=1000] [EXPERIMENTS="..."] [SKIP_SCORING=1] bash scripts/span_kd_run_all.sh
 #
 # 1. scripts/score_gain.sh with SPAN_MODE=word (word spans, student and teacher gain, span-gains.json). The cost is the
 #    teacher's answer-gain probes (one per response token): measured ~38 probes/s for Qwen2.5-14B on one A100-80GB, i.e.
@@ -30,6 +30,7 @@ fi
 export DATA_DIR="${DATA_DIR:-${work}/${student_tag}}"
 export OUT_ROOT="${OUT_ROOT:-outputs/span-kd-${DATASET}}"
 export RESULTS_DIR="${RESULTS_DIR:-results/span-kd-${DATASET}}"
-[[ "${DATASET}" == s1k ]] && export MICRO_BATCH_SIZE="${MICRO_BATCH_SIZE:-4}"
+[[ "${DATASET}" != gsm8k ]] && export MICRO_BATCH_SIZE="${MICRO_BATCH_SIZE:-4}"  # ~1,000-token samples
+[[ "${DATASET}" == tsdkd ]] && export EPOCHS="${EPOCHS:-2}" BATCH_SIZE="${BATCH_SIZE:-64}"  # the TSD-KD schedule
 bash scripts/span_kd_train.sh
 bash scripts/span_kd_eval.sh

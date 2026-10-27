@@ -98,6 +98,19 @@ Nhận xét (chỉ những điều số liệu hỗ trợ):
 - **s1K chưa có gain.** Dữ liệu `simplescaling/s1K-1.1`, cột `deepseek_attempt` (không dùng phần suy nghĩ dài), còn 830 bài sau khi lọc theo có `\boxed` và giới hạn 1.024/2.560 token; 397.369 span, khoảng 473.000 lần chấm cho mỗi model (gấp 5 lần GSM8K 1k, ước 3,5 giờ cho teacher trên một GPU). Hai lần chấm 6 và 3 shard bị dừng: lần đầu vì workspace Modal hết hạn mức chi tiêu, lần sau tôi dừng vì tốn credit. Kết quả shard chỉ được lưu khi shard chạy xong nên mất hết. `answer_gain.py` nay in tiến độ; **chưa sửa** việc lưu kết quả giữa chừng.
 - Chưa làm: prompt và dữ liệu của anh Phong (UltraInteract, lời giải do teacher sinh), nhiều seed, on-policy, các benchmark còn lại (GSM-Plus, MBPP, SciQ, MMLU, BBH).
 
+## 6b. Dữ liệu TSD-KD (toán) và cách chạy
+
+Dữ liệu: `Minsang/TSD-KD-Qwen2.5-14B-Instruct-Gen` (79.751 mẫu), prompt lấy nguyên từ bản phát hành (không thêm câu lệnh ALERD), output là lời giải do teacher 14B sinh (off-policy). Lọc theo tiền tố `Solve the following math problem step-by-step.` còn 22.582 mẫu Math CoT, bỏ 39 mẫu không có `\boxed{}` còn **22.543**; bỏ mẫu dài hơn 1.024 token (prompt + lời giải, cùng tokenizer cho teacher và student) còn **21.347**. Độ dài prompt + lời giải: trung vị 455, p95 843 token.
+
+Chi phí chấm gain (ước từ tốc độ đã đo; chưa chạy): lời giải trung bình khoảng 350 token, nên 21.347 mẫu có khoảng 7,5 triệu lần chấm mỗi model, tức khoảng 55 giờ cho teacher (38 lần/giây) và hơn 20 giờ cho student. **Không chấm toàn bộ.** Dùng `LIMIT=N` (N mẫu đầu sau khi lọc): 1.000 mẫu khoảng 350.000 lần chấm mỗi model (teacher ước 2,5 giờ, student ước 1 giờ trên một A100-80GB).
+
+```bash
+bash scripts/prepare_tsdkd.sh                       # CPU: tải, lọc, đếm số mẫu và độ dài token
+DATASET=tsdkd LIMIT=1000 bash scripts/span_kd_run_all.sh   # chấm gain (GPU) -> train 5 cấu hình (LoRA, 2 epoch, batch 64) -> eval
+```
+
+Với `DATASET=tsdkd`, `scripts/score_gain.sh` giới hạn 1.024 token cho cả hai mô hình; `span_kd_run_all.sh` đặt epoch 2, batch 64, micro-batch 4 (đổi bằng biến môi trường). Student vẫn dùng LoRA như trước (learning rate 1e-4, khác với fine-tune toàn bộ ở bài TSD-KD). Bộ eval vẫn là GSM8K, MATH500, AIME24, AIME25; các benchmark còn lại (GSM-Plus, Minerva Math, MMLU-Pro-Math, ...) chưa có trong `benchmark_eval.py`.
+
 ## 7. Dữ liệu tái sử dụng
 
 Xem `plans/reports/artifacts-index-261026-1250.md`: gain, chỉ mục span, kết quả train/eval của GSM8K 1k nằm ở `work/archive/gsm8k-1k/` (máy) và volume Modal `alerd-ctkd-results` của workspace cũ (cùng 9 checkpoint đã gộp LoRA). Gain gắn với đúng văn bản (prompt + lời giải) qua mã băm: đổi prompt hoặc dữ liệu thì phải chấm lại.

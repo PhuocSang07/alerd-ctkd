@@ -119,6 +119,6 @@ def main(limit: int = 0, student: str = "Qwen/Qwen2.5-1.5B-Instruct", teacher: s
         print(json.dumps(score.remote(limit, student, teacher, utilization, dataset), indent=2))
         return
     call = run_sharded.spawn(limit, student, teacher, utilization, dataset, shards,
-                             max_len or (1024 if dataset == "s1k" else 512))
+                             max_len or (512 if dataset == "gsm8k" else 1024))
     print(f"started {call.object_id}; the result lands in {base_name(dataset, limit)}/sharded-run.json of the "
           "alerd-ctkd-results volume (run with --detach, the client may exit)")
