@@ -12,6 +12,14 @@ from prepare_sra_data import build_rows, check_boundary, clean_rows, convert_row
 from prompts import FIXED_DATE, INSTRUCTION, build_prompt, has_chat_template  # noqa: E402
 from benchmark_eval import build_prompts, gsm8k_gold, gsm8k_records  # noqa: E402
 
+def test_tsdkd_prompt_style_is_the_training_instruction():
+    raw = type("Raw", (), {"chat_template": None})()
+    assert build_prompt(raw, "What is 2+2?", "tsdkd") == (
+        "Solve the following math problem step-by-step.\nSimplify your answer as much as possible. "
+        "Present your final answer as \\boxed{Your Answer}.\nWhat is 2+2?")
+    assert build_prompt(raw, "q") == build_prompt(raw, "q", "alerd")
+
+
 GSM8K_ROW = {
     "question": "Natalia sold clips to 48 of her friends in April, and then she sold half as many clips in May. "
                 "How many clips did Natalia sell altogether in April and May?",

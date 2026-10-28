@@ -26,6 +26,11 @@ def wrap_user(tokenizer, content):
                                          add_generation_prompt=True, enable_thinking=False, **extra)
 
 
-def build_prompt(tokenizer, question):
+TSDKD_INSTRUCTION = ("Solve the following math problem step-by-step.\nSimplify your answer as much as possible. "
+                     "Present your final answer as \\boxed{{Your Answer}}.\n{question}")
+INSTRUCTIONS = {"alerd": INSTRUCTION, "tsdkd": TSDKD_INSTRUCTION}
+
+
+def build_prompt(tokenizer, question, style="alerd"):
     """Raw instruction for tokenizers without a chat template, else the instruction as one templated user turn."""
-    return wrap_user(tokenizer, INSTRUCTION.format(question=question))
+    return wrap_user(tokenizer, INSTRUCTIONS[style].format(question=question))

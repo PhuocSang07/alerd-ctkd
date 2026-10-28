@@ -18,7 +18,7 @@ from math import comb
 from pathlib import Path
 
 from answer_scoring import grade_math_verify
-from prompts import INSTRUCTION, build_prompt, has_chat_template
+from prompts import INSTRUCTION, INSTRUCTIONS, build_prompt, has_chat_template
 
 # On an offline server, BENCH_DATA_ROOT/<local dir name> replaces the Hugging Face repo id.
 BENCH_DATA_ROOT = os.environ.get("BENCH_DATA_ROOT")
@@ -75,7 +75,8 @@ def build_prompts(model_path, records, config):
     from transformers import AutoTokenizer
 
     tokenizer = AutoTokenizer.from_pretrained(config.get("base_model") or model_path)
-    prompts = [{"prompt_token_ids": tokenizer.encode(build_prompt(tokenizer, record["question"]),
+    style = config.get("prompt_style", "alerd")
+    prompts = [{"prompt_token_ids": tokenizer.encode(build_prompt(tokenizer, record["question"], style),
                                                      add_special_tokens=False)} for record in records]
     longest = max(len(p["prompt_token_ids"]) for p in prompts)
     if longest >= config["max_model_len"]:
@@ -153,6 +154,8 @@ def build_parser():
     parser.add_argument("--benchmarks", default="gsm8k,math500")
     parser.add_argument("--rescore", help="grade an existing raw generations file and exit")
     parser.add_argument("--base-model", help="supplies the tokenizer and prompt format (the student's)")
+    parser.add_argument("--prompt-style", choices=sorted(INSTRUCTIONS), default="alerd",
+                        help="instruction wrapped around the question; use the one the student was trained with")
     parser.add_argument("--temperature", type=float, default=0.6)
     parser.add_argument("--top-p", type=float, default=0.9)
     parser.add_argument("--repetition-penalty", type=float, default=1.0)
@@ -192,7 +195,7 @@ def main(argv=None):
         return
     if not args.model:
         raise SystemExit("--model is required unless --rescore is given")
-    config = {"base_model": args.base_model, "temperature": args.temperature, "top_p": args.top_p,
+    config = {"base_model": args.base_model, "prompt_style": args.prompt_style, "temperature": args.temperature, "top_p": args.top_p,
               "repetition_penalty": args.repetition_penalty, "n_samples": args.n_samples,
               "max_tokens": args.max_tokens, "max_model_len": args.max_model_len,
               "gpu_memory_utilization": args.gpu_memory_utilization, "batch_size": args.batch_size,
