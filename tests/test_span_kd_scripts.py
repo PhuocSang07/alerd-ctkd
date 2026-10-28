@@ -43,6 +43,13 @@ def test_each_experiment_gets_its_weights_and_the_teacher_only_when_it_distills(
     assert (flag(gain_kd, "--ce-weights"), flag(gain_kd, "--kd-weights")) == ("token", "diff")
     assert (flag(lam1, "--ce-weights"), flag(lam1, "--kd-weights"), flag(lam1, "--alloc-lambda")) == ("student", "diff", "1.0")
     assert all("--dump-spans" in line and flag(line, "--seed") == "10" for line in lines)
+    assert all(flag(line, "--loss-mean") == "sample" for line in lines)
+
+
+def test_kd_token_mean_averages_over_the_tokens_of_the_batch(tmp_path, data_dir):
+    env = {"DATA_DIR": str(data_dir), "OUT_ROOT": str(tmp_path / "out"), "EXPERIMENTS": "kd-token-mean"}
+    (line,) = commands(run("span_kd_train.sh", env), "span_kd_train.py")
+    assert flag(line, "--loss-mean") == "token" and flag(line, "--kd-weights") == "token"
 
 
 def test_default_experiments_are_the_five_of_the_ablation(tmp_path, data_dir):
@@ -89,7 +96,7 @@ def test_run_all_on_the_tsdkd_math_data_trains_two_epochs_with_batch_64(tmp_path
            "WORK_ROOT": str(tmp_path / "w"), "OUT_ROOT": str(tmp_path / "out"), "RESULTS_DIR": str(tmp_path / "res")}
     result = run("span_kd_run_all.sh", env, check=False)
     [line] = commands(result, "span_kd_train.py")
-    assert flag(line, "--epochs") == "2" and flag(line, "--batch-size") == "64" and flag(line, "--micro-batch-size") == "4"
+    assert flag(line, "--epochs") == "2" and flag(line, "--batch-size") == "64" and flag(line, "--micro-batch-size") == "8"
 
 
 def test_run_all_scores_with_word_spans_then_trains_then_evaluates(tmp_path):

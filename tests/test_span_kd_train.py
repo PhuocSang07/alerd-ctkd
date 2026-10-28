@@ -215,6 +215,16 @@ def test_token_weights_make_the_ce_the_mean_over_each_samples_tokens(workspace):
     assert loss.item() == pytest.approx(torch.stack(per_sample).mean().item())
 
 
+def test_token_mean_with_token_weights_is_the_plain_mean_over_all_tokens_of_the_batch(workspace):
+    data = dataset(workspace, "token", "token")
+    batch = collate(workspace, [data[i] for i in range(4)])
+    student, teacher = torch.randn(len(batch["labels"]), len(workspace["tok"])), torch.randn(
+        len(batch["labels"]), len(workspace["tok"]))
+    loss, _ = weighted_loss(batch, student, teacher, 0.5, 10, 1.0, loss_mean="token")
+    ce, kl = distill_terms(student, teacher, batch["labels"], 10, 1.0)
+    assert loss.item() == pytest.approx((0.5 * ce.mean() + 0.5 * kl.mean()).item(), rel=1e-5)
+
+
 # ---- training ------------------------------------------------------------------------------------------------------
 
 def test_end_to_end_training_saves_a_merged_hf_checkpoint(workspace, tmp_path):

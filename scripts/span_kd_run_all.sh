@@ -8,13 +8,15 @@
 #    ~42 min for 1,000 GSM8K problems and over 3 hours for the 830 s1K problems; SKIP_SCORING=1 reuses an earlier run.
 # 2. scripts/span_kd_train.sh on that output.
 # 3. scripts/span_kd_eval.sh (GSM8K, MATH500, AIME24, AIME25 at 4096 new tokens; ZERO_SHOT=1 adds the student).
+# DATASET=tsdkd defaults: the first 1000 rows (LIMIT=), 2 epochs, effective batch 64 in micro batches of 8, the five
+# experiments plus kd-token-mean, and the zero-shot student in the evaluation.
 # Every setting of those scripts (STUDENT, TEACHER, EPOCHS, LEARNING_RATE, ...) can be passed through the environment.
 set -euo pipefail
 
 export STUDENT=${STUDENT:-Qwen/Qwen2.5-1.5B-Instruct}
 export TEACHER=${TEACHER:-Qwen/Qwen2.5-14B-Instruct}
 DATASET=${DATASET:-gsm8k}
-LIMIT=${LIMIT:-}
+if [[ "${DATASET}" == tsdkd ]]; then LIMIT=${LIMIT-1000}; else LIMIT=${LIMIT:-}; fi  # tsdkd: first 1000 rows; LIMIT= for all
 SKIP_SCORING=${SKIP_SCORING:-0}
 student_tag=$(basename "${STUDENT}")
 
@@ -30,7 +32,11 @@ fi
 export DATA_DIR="${DATA_DIR:-${work}/${student_tag}}"
 export OUT_ROOT="${OUT_ROOT:-outputs/span-kd-${DATASET}}"
 export RESULTS_DIR="${RESULTS_DIR:-results/span-kd-${DATASET}}"
-[[ "${DATASET}" != gsm8k ]] && export MICRO_BATCH_SIZE="${MICRO_BATCH_SIZE:-4}"  # ~1,000-token samples
-[[ "${DATASET}" == tsdkd ]] && export EPOCHS="${EPOCHS:-2}" BATCH_SIZE="${BATCH_SIZE:-64}"  # the TSD-KD schedule
+[[ "${DATASET}" != s1k ]] || export MICRO_BATCH_SIZE="${MICRO_BATCH_SIZE:-4}"  # ~1,000-token samples
+if [[ "${DATASET}" == tsdkd ]]; then  # the TSD-KD schedule: effective batch 64 (8 micro batches of 8 on an H200 141GB)
+  export EPOCHS="${EPOCHS:-2}" BATCH_SIZE="${BATCH_SIZE:-64}" MICRO_BATCH_SIZE="${MICRO_BATCH_SIZE:-8}"
+  export EXPERIMENTS="${EXPERIMENTS:-sft kd-token kd-token-mean gain-ce gain-kd gain-both}"
+  export ZERO_SHOT="${ZERO_SHOT:-1}"
+fi
 bash scripts/span_kd_train.sh
 bash scripts/span_kd_eval.sh

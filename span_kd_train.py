@@ -12,6 +12,9 @@ Every span n of a sample gets a mass omega_n (sum_n omega_n = 1) and every token
 
     loss_CE = mean_samples sum_n omega^CE_n * mean_{t in span n} CE_t        (likewise for KD with omega^KD)
 
+`--loss-mean token` weighs each sample by its token count instead (sum_i T_i loss_i / sum_i T_i), which makes the `token`
+weights the plain token mean of the baselines.
+
 `--ce-weights` / `--kd-weights` pick omega: `token` (every token weighs the same), `uniform` (every span weighs the
 same) or the budget-preserving answer-gain weights of ALERD Eq. 3-5 computed from the `student`, `teacher` or `diff`
 (teacher minus student) span gains of span-gains.json. The EOS the student has to emit after the response joins the last
@@ -161,17 +164,23 @@ def distill_terms(student_logits, teacher_logits, labels, top_k, temperature):
     return ce, kl
 
 
-def weighted_loss(batch, student_logits, teacher_logits, beta, top_k, temperature, keep=None):
-    """(1 - beta) * CE + beta * KD with the masses of the collator; per-sample sums of mass 1, mean over samples.
+def weighted_loss(batch, student_logits, teacher_logits, beta, top_k, temperature, keep=None, loss_mean="sample"):
+    """(1 - beta) * CE + beta * KD with the masses of the collator; per-sample sums of mass 1.
 
-    `keep`, a dict, receives the detached per-token `ce` and `kd` (for dump_span_rows)."""
+    `loss_mean` "sample" averages the samples of the batch (each weighs the same); "token" scales a sample by its
+    token count and divides by the tokens of the batch, so uniform per-token masses give the plain token mean of the
+    baselines' SFT and KD losses. `keep`, a dict, receives the detached per-token `ce` and `kd` (for dump_span_rows)."""
     ce, kl = distill_terms(student_logits, teacher_logits, batch["labels"], top_k, temperature) \
         if teacher_logits is not None else (F.cross_entropy(student_logits, batch["labels"], reduction="none"), None)
-    n = batch["n_samples"]
+    if loss_mean == "token":
+        n = len(batch["labels"])
+        scale = torch.bincount(batch["s_b"], minlength=batch["n_samples"])[batch["s_b"]].to(ce.dtype)
+    else:
+        n, scale = batch["n_samples"], 1.0
     if keep is not None:
         keep.update(ce=ce.detach(), kd=None if kl is None else kl.detach())
-    ce_loss = (batch["w_ce"] * ce).sum() / n
-    kd_loss = ce_loss.new_zeros(()) if kl is None else (batch["w_kd"] * kl).sum() / n
+    ce_loss = (batch["w_ce"] * scale * ce).sum() / n
+    kd_loss = ce_loss.new_zeros(()) if kl is None else (batch["w_kd"] * scale * kl).sum() / n
     stats = {"ce": ce_loss.item(), "kd": kd_loss.item(), "ce_token": ce.mean().item(),
              "kd_token": 0.0 if kl is None else kl.mean().item()}
     return (1.0 - beta) * ce_loss + beta * kd_loss, stats
@@ -289,7 +298,7 @@ def train(args):
                     batch["s_b"], batch["s_p"]][:, :vocab].float()
                 terms = {}
                 loss, stats = weighted_loss(batch, student_logits, teacher_logits, args.kd_beta, args.kd_top_k,
-                                            args.temperature, terms)
+                                            args.temperature, terms, args.loss_mean)
             if not torch.isfinite(loss):
                 raise FloatingPointError(f"non-finite loss at step {step}: {stats}")
             (loss / accum).backward()
@@ -322,6 +331,8 @@ def parse_args(argv=None):
     p.add_argument("--ce-weights", choices=STRUCTURAL_SOURCES + GAIN_SOURCES, default="token")
     p.add_argument("--kd-weights", choices=STRUCTURAL_SOURCES + GAIN_SOURCES, default="token")
     p.add_argument("--kd-beta", type=float, default=0.5, help="loss = (1 - beta) CE + beta KD; 0 is plain SFT")
+    p.add_argument("--loss-mean", choices=("sample", "token"), default="sample",
+                   help="average the micro batch over its samples or over its tokens (the baselines' token mean)")
     p.add_argument("--kd-top-k", type=int, default=50)
     p.add_argument("--temperature", type=float, default=1.0)
     p.add_argument("--alloc-tau", type=float, default=1.0)

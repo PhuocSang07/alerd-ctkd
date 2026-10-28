@@ -10,6 +10,8 @@
 # name            CE masses  KD masses  beta  lambda
 #   sft           token      -          0     0.5    CE only, the teacher is not loaded
 #   kd-token      token      token      0.5   0.5    plain token-mean CE + KD
+#   kd-token-mean token      token      0.5   0.5    kd-token averaged over the tokens of the batch (the baselines'
+#                                                    token mean); the other rows average over the samples
 #   kd-uniform    uniform    uniform    0.5   0.5    every span the same mass
 #   gain-ce       student    token      0.5   0.5    student gain on the CE only
 #   gain-kd       token      diff       0.5   0.5    teacher - student gain on the KD only
@@ -39,9 +41,11 @@ for file in train-sra.jsonl "spans-${teacher_tag}.jsonl" span-gains.json; do
 done
 
 for name in ${EXPERIMENTS}; do
+  mean=sample
   case "${name}" in
     sft)            ce=token;   kd=token;   beta=0;   lam=0.5 ;;
     kd-token)       ce=token;   kd=token;   beta=0.5; lam=0.5 ;;
+    kd-token-mean)  ce=token;   kd=token;   beta=0.5; lam=0.5; mean=token ;;
     kd-uniform)     ce=uniform; kd=uniform; beta=0.5; lam=0.5 ;;
     gain-ce)        ce=student; kd=token;   beta=0.5; lam=0.5 ;;
     gain-kd)        ce=token;   kd=diff;    beta=0.5; lam=0.5 ;;
@@ -60,7 +64,7 @@ for name in ${EXPERIMENTS}; do
     --spans-file "${DATA_DIR}/spans-${teacher_tag}.jsonl" --gains-file "${DATA_DIR}/span-gains.json" \
     --student-model "${STUDENT}" "${teacher_args[@]}" --output-dir "${out}" \
     --ce-weights "${ce}" --kd-weights "${kd}" --kd-beta "${beta}" --alloc-lambda "${lam}" --kd-top-k "${KD_TOP_K}" \
-    --epochs "${EPOCHS}" --batch-size "${BATCH_SIZE}" --micro-batch-size "${MICRO_BATCH_SIZE}" \
+    --loss-mean "${mean}" --epochs "${EPOCHS}" --batch-size "${BATCH_SIZE}" --micro-batch-size "${MICRO_BATCH_SIZE}" \
     --learning-rate "${LEARNING_RATE}" --seed "${SEED}" --dump-spans "${out}/spans.jsonl"
   echo "trained ${name} in $((SECONDS - started)) s -> ${out}"
 done

@@ -114,7 +114,7 @@ DATASET=tsdkd bash scripts/span_kd_run_all.sh              # không đặt LIMIT
 
 Các bước chạy riêng lẻ, theo thứ tự: `scripts/score_gain.sh` (lọc, chuẩn bị, chấm gain student và teacher, tạo chỉ mục span và `span-gains.json`), `scripts/span_kd_train.sh` (huấn luyện, chọn cấu hình bằng `EXPERIMENTS`), `scripts/span_kd_eval.sh` (đánh giá). `scripts/span_kd_run_all.sh` chạy cả ba; `SKIP_SCORING=1` dùng lại gain đã có.
 
-Với `DATASET=tsdkd`, `scripts/score_gain.sh` giới hạn 1.024 token cho cả hai mô hình; `span_kd_run_all.sh` đặt epoch 2, batch 64, micro-batch 4 (đổi bằng biến môi trường). Student vẫn dùng LoRA như trước (learning rate 1e-4, khác với fine-tune toàn bộ ở bài TSD-KD). Bộ eval vẫn là GSM8K, MATH500, AIME24, AIME25; các benchmark còn lại (GSM-Plus, Minerva Math, MMLU-Pro-Math, ...) chưa có trong `benchmark_eval.py`.
+Với `DATASET=tsdkd`, `scripts/score_gain.sh` giới hạn 1.024 token cho cả hai mô hình; `span_kd_run_all.sh` đặt epoch 2, batch hiệu dụng 64 với micro-batch 8 (cho H200 141 GB; chưa chạy thử trên GPU, hạ `MICRO_BATCH_SIZE` nếu hết bộ nhớ), 1.000 mẫu đầu (`LIMIT=` để lấy hết), thêm cấu hình `kd-token-mean` (KD chuẩn hóa theo token toàn batch như baseline, các cấu hình khác chuẩn hóa theo mẫu) và student zero-shot khi eval; eval dùng prompt TSD-KD (`PROMPT_STYLE`). Cài thư viện bằng `pip install -r requirements.txt`. Student vẫn dùng LoRA như trước (learning rate 1e-4, khác với fine-tune toàn bộ ở bài TSD-KD). Bộ eval vẫn là GSM8K, MATH500, AIME24, AIME25; các benchmark còn lại (GSM-Plus, Minerva Math, MMLU-Pro-Math, ...) chưa có trong `benchmark_eval.py`.
 
 ## 7. Dữ liệu tái sử dụng
 

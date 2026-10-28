@@ -1,11 +1,16 @@
-transformers
+# Python 3.10+, one CUDA GPU (A100-80GB or H200 for the 14B teacher). vllm pulls the matching torch build.
+# CPU tests (python -m pytest tests) only need torch, transformers, peft, datasets, numpy, scipy and pytest.
+vllm==0.10.1.1
+transformers==4.55.4
 peft
-rouge_score
-scikit-learn
+datasets
+huggingface_hub
+numpy
 scipy
 tqdm
-huggingface_hub
-datasets
-numpy
-pytest
 math-verify
+rouge_score
+scikit-learn
+pytest
+# only for scripts/modal_*.py
+modal

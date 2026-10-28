@@ -22,7 +22,7 @@ image = (
     .add_local_dir(".", REPO, ignore=["work", "work-*", "outputs", "results", "tests", "plans", "references", ".git",
                                       "**/__pycache__"])
 )
-NAMES = ["sft", "kd-token", "kd-uniform", "gain-ce", "gain-kd", "gain-both", "gain-student", "gain-diff",
+NAMES = ["sft", "kd-token", "kd-token-mean", "kd-uniform", "gain-ce", "gain-kd", "gain-both", "gain-student", "gain-diff",
          "gain-both-lam1"]
 SUITES = (("math500", 3), ("aime24,aime25", 16))
 BENCHMARKS = ("math500", "aime24", "aime25")

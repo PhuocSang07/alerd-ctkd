@@ -30,6 +30,7 @@ image = (
 EXPERIMENTS = {
     "sft": ("token", "token", 0.0, 0.5),               # CE only, the teacher is not loaded
     "kd-token": ("token", "token", 0.5, 0.5),          # plain token-mean CE + KD
+    "kd-token-mean": ("token", "token", 0.5, 0.5),     # kd-token averaged over the tokens of the batch (see LOSS_MEAN)
     "kd-uniform": ("uniform", "uniform", 0.5, 0.5),    # every span the same mass
     "gain-ce": ("student", "token", 0.5, 0.5),         # student gain on the CE only
     "gain-kd": ("token", "diff", 0.5, 0.5),            # teacher - student gain on the KD only
@@ -38,7 +39,7 @@ EXPERIMENTS = {
     "gain-diff": ("diff", "diff", 0.5, 0.5),           # teacher - student gain on both
     "gain-both-lam1": ("student", "diff", 0.5, 1.0),   # the full gain weights, no uniform share
 }
-
+LOSS_MEAN = {"kd-token-mean": "token"}  # every other experiment averages over the samples of a micro batch
 
 # the default set: the baseline, the SFT reference and the gain weights on the CE, on the KD and on both
 DEFAULT_NAMES = ["sft", "kd-token", "gain-ce", "gain-kd", "gain-both"]
@@ -88,6 +89,7 @@ def experiment(work: str, student: str, teacher: str, tag: str, name: str, epoch
                "--spans-file", f"{data}/spans-{teacher.split('/')[-1]}.jsonl", "--gains-file", f"{data}/span-gains.json",
                "--student-model", student, "--output-dir", out, "--ce-weights", ce, "--kd-weights", kd,
                "--kd-beta", str(beta), "--kd-top-k", str(kd_top_k), "--alloc-lambda", str(lam),
+               "--loss-mean", LOSS_MEAN.get(name, "sample"),
                "--epochs", str(epochs), "--batch-size", str(batch_size), "--micro-batch-size", str(micro_batch_size),
                "--learning-rate", str(learning_rate), "--dump-spans", f"{out}/spans.jsonl"]
     if beta > 0:
