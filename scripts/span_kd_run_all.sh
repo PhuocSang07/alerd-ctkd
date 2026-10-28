@@ -8,7 +8,7 @@
 #    ~42 min for 1,000 GSM8K problems and over 3 hours for the 830 s1K problems; SKIP_SCORING=1 reuses an earlier run.
 # 2. scripts/span_kd_train.sh on that output.
 # 3. scripts/span_kd_eval.sh (GSM8K, MATH500, AIME24, AIME25 at 4096 new tokens; ZERO_SHOT=1 adds the student).
-# DATASET=tsdkd defaults: the first 1000 rows (LIMIT=), 2 epochs, effective batch 64 in micro batches of 8, the five
+# DATASET=tsdkd defaults: the first 2000 rows (LIMIT=), 2 epochs, effective batch 64 in micro batches of 8, the five
 # experiments plus kd-token-mean, and the zero-shot student in the evaluation.
 # Every setting of those scripts (STUDENT, TEACHER, EPOCHS, LEARNING_RATE, ...) can be passed through the environment.
 set -euo pipefail
@@ -16,7 +16,7 @@ set -euo pipefail
 export STUDENT=${STUDENT:-Qwen/Qwen2.5-1.5B-Instruct}
 export TEACHER=${TEACHER:-Qwen/Qwen2.5-14B-Instruct}
 DATASET=${DATASET:-gsm8k}
-if [[ "${DATASET}" == tsdkd ]]; then LIMIT=${LIMIT-1000}; else LIMIT=${LIMIT:-}; fi  # tsdkd: first 1000 rows; LIMIT= for all
+if [[ "${DATASET}" == tsdkd ]]; then LIMIT=${LIMIT-2000}; else LIMIT=${LIMIT:-}; fi  # tsdkd: first 2000 rows; LIMIT= for all
 SKIP_SCORING=${SKIP_SCORING:-0}
 student_tag=$(basename "${STUDENT}")
 
