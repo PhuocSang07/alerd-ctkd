@@ -88,7 +88,7 @@ for student in ${STUDENTS}; do
   fi
   first=${first:-${out}/train-sra.jsonl}
   score "${student}" student "${out}/train-sra.jsonl" "${out}"
-  if [[ -z "${LIMIT}" && -z "${SHARD}" ]]; then
+  if [[ -z "${LIMIT}" && -z "${SHARD}" && -z "${SPAN_MODE}" ]]; then  # the word-span track does not use predictability
     "${PYTHON}" score_predictability.py --data "${out}/tokens-${tag}.jsonl" --model "${student}" \
       --output "${out}/predictability.json"
   fi
