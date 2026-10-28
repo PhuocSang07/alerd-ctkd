@@ -20,6 +20,7 @@ student or teacher would straddle the prompt/output boundary, the row fails the 
 """
 import argparse
 import json
+import random
 import re
 import statistics
 from pathlib import Path
@@ -29,8 +30,9 @@ from prompts import build_prompt, wrap_user
 
 STEP = re.compile(r"[^\n]+\n*")
 MATH_COT_PREFIX = "Solve the following math problem step-by-step."
-TSDKD_DATASET = "Minsang/TSD-KD-Qwen2.5-14B-Instruct-Gen"
-TSDKD_FILE = "Qwen2.5-14B-Instruct_train_all.jsonl"
+TSDKD_DATASET = "phuocsang/UltraInteract-math-Qwen2.5-14B-Instruct-Gen"  # the Math CoT rows, already filtered
+TSDKD_FILTERED_FILE = "tsdkd-clean.jsonl"
+TSDKD_RELEASE_FILE = "Qwen2.5-14B-Instruct_train_all.jsonl"  # unfiltered release (Minsang/TSD-KD-Qwen2.5-14B-Instruct-Gen)
 CALCULATOR = re.compile(r"<<[^<>]*>>")
 NUMBER = re.compile(r"-?\d+(\.\d+)?")
 
@@ -111,6 +113,34 @@ def clean_tsdkd_rows(rows):
         kept.append(converted)
     steps = [len(r["step_char_ends"]) for r in kept]
     return kept, {**counts, "kept": len(kept), "steps_median": statistics.median(steps), "steps_max": max(steps)}
+
+
+def load_tsdkd_rows(source):
+    """Rows of a local jsonl, or of a Hub dataset: its filtered file when it has one, else the raw release file."""
+    if Path(source).is_file():
+        return read_jsonl(source)
+    from huggingface_hub import hf_hub_download
+    from huggingface_hub.utils import EntryNotFoundError
+
+    try:
+        return read_jsonl(hf_hub_download(source, TSDKD_FILTERED_FILE, repo_type="dataset"))
+    except EntryNotFoundError:
+        return read_jsonl(hf_hub_download(source, TSDKD_RELEASE_FILE, repo_type="dataset"))
+
+
+def clean_tsdkd_source(rows):
+    """Filtered rows pass through unchanged; raw release rows are filtered with clean_tsdkd_rows."""
+    if rows and "output" in rows[0]:
+        return rows, {"rows": len(rows), "kept": len(rows), "already_filtered": True}
+    return clean_tsdkd_rows(rows)
+
+
+def sample_rows(rows, count, seed):
+    """`count` rows drawn without replacement (kept in their original order); 0 or too few rows: all of them."""
+    if not count or count >= len(rows):
+        return rows
+    chosen = sorted(random.Random(seed).sample(range(len(rows)), count))
+    return [rows[i] for i in chosen]
 
 
 def clean_s1k_rows(rows):
@@ -211,7 +241,8 @@ def main(argv=None):
     s1k.add_argument("--split", default="train")
     s1k.add_argument("--output", required=True)
     tsd = sub.add_parser("clean-tsdkd")
-    tsd.add_argument("--dataset", default=TSDKD_DATASET, help="HF dataset id or a local jsonl of the release")
+    tsd.add_argument("--dataset", default=TSDKD_DATASET,
+                     help="Hub dataset id or local jsonl: the filtered math rows, or the raw TSD-KD release")
     tsd.add_argument("--output", required=True)
     b = sub.add_parser("build")
     b.add_argument("--clean", required=True, help="output of the clean step")
@@ -219,16 +250,14 @@ def main(argv=None):
     b.add_argument("--teacher-tokenizer", required=True)
     b.add_argument("--max-len", type=int, help="drop rows longer than this many student tokens (prompt + output)")
     b.add_argument("--teacher-max-len", type=int, help="drop rows longer than this many teacher tokens")
+    b.add_argument("--num-samples", type=int, default=0,
+                   help="keep this many random rows after the length filter (0 = all of them)")
+    b.add_argument("--sample-seed", type=int, default=10)
     b.add_argument("--output", required=True)
     args = parser.parse_args(argv)
 
     if args.command == "clean-tsdkd":
-        path = args.dataset
-        if not Path(path).is_file():
-            from huggingface_hub import hf_hub_download
-
-            path = hf_hub_download(args.dataset, TSDKD_FILE, repo_type="dataset")
-        kept, stats = clean_tsdkd_rows(read_jsonl(path))
+        kept, stats = clean_tsdkd_source(load_tsdkd_rows(args.dataset))
         write_jsonl(args.output, kept)
         print(json.dumps(stats))
         return
@@ -251,8 +280,11 @@ def main(argv=None):
     teacher = AutoTokenizer.from_pretrained(args.teacher_tokenizer, trust_remote_code=True)
     clean = read_jsonl(args.clean)
     rows = build_rows(clean, student, teacher, args.max_len, args.teacher_max_len)
+    usable = len(rows)
+    rows = sample_rows(rows, args.num_samples, args.sample_seed)
     write_jsonl(args.output, rows)
-    print(f"{len(rows)} samples -> {args.output} ({len(clean) - len(rows)} dropped as longer than the token limits)")
+    print(f"{len(rows)} samples -> {args.output} ({len(clean) - usable} dropped as longer than the token limits"
+          + (f", {usable - len(rows)} left out by --num-samples {args.num_samples}" if len(rows) < usable else "") + ")")
     print(length_stats(student, rows, "student"))
     print(length_stats(teacher, rows, "teacher"))
 

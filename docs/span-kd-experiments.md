@@ -100,14 +100,19 @@ Nhận xét (chỉ những điều số liệu hỗ trợ):
 
 ## 6b. Dữ liệu TSD-KD (toán) và cách chạy
 
-Dữ liệu: `Minsang/TSD-KD-Qwen2.5-14B-Instruct-Gen` (79.751 mẫu), prompt lấy nguyên từ bản phát hành (không thêm câu lệnh ALERD), output là lời giải do teacher 14B sinh (off-policy). Lọc theo tiền tố `Solve the following math problem step-by-step.` còn 22.582 mẫu Math CoT, bỏ 39 mẫu không có `\boxed{}` còn **22.543**; bỏ mẫu dài hơn 1.024 token (prompt + lời giải, cùng tokenizer cho teacher và student) còn **21.347**. Độ dài prompt + lời giải: trung vị 455, p95 843 token.
+Dữ liệu: bộ Math CoT đã lọc `phuocsang/UltraInteract-math-Qwen2.5-14B-Instruct-Gen` (22.543 mẫu, public; lọc từ `Minsang/TSD-KD-Qwen2.5-14B-Instruct-Gen`, 79.751 mẫu), prompt lấy nguyên từ bản phát hành (không thêm câu lệnh ALERD), output là lời giải do teacher 14B sinh (off-policy, theo README của tác giả TSD-KD). Chỉ lấy Math CoT, không lấy Math PoT (22.718 mẫu, prompt có công cụ Python). Lọc theo tiền tố `Solve the following math problem step-by-step.` còn 22.582 mẫu Math CoT, bỏ 39 mẫu không có `\boxed{}` còn **22.543**; bỏ mẫu dài hơn 1.024 token (prompt + lời giải, cùng tokenizer cho teacher và student) còn **21.347**. Độ dài prompt + lời giải: trung vị 455, p95 843 token.
 
 Chi phí chấm gain (ước từ tốc độ đã đo; chưa chạy): lời giải trung bình khoảng 350 token, nên 21.347 mẫu có khoảng 7,5 triệu lần chấm mỗi model, tức khoảng 55 giờ cho teacher (38 lần/giây) và hơn 20 giờ cho student. **Không chấm toàn bộ.** Dùng `LIMIT=N` (N mẫu đầu sau khi lọc): 1.000 mẫu khoảng 350.000 lần chấm mỗi model (teacher ước 2,5 giờ, student ước 1 giờ trên một A100-80GB).
 
 ```bash
-bash scripts/prepare_tsdkd.sh                       # CPU: tải, lọc, đếm số mẫu và độ dài token
+NUM_SAMPLES=1000 bash scripts/prepare_tsdkd.sh      # CPU: tải, lọc, đếm số mẫu và độ dài token (bỏ NUM_SAMPLES = lấy hết)
 DATASET=tsdkd LIMIT=1000 bash scripts/span_kd_run_all.sh   # chấm gain (GPU) -> train 5 cấu hình (LoRA, 2 epoch, batch 64) -> eval
+DATASET=tsdkd bash scripts/span_kd_run_all.sh              # không đặt LIMIT: dùng toàn bộ 21.347 mẫu vừa 1.024 token
 ```
+
+`LIMIT=K` với `DATASET=tsdkd` là **K mẫu ngẫu nhiên** (seed `SAMPLE_SEED`, mặc định 10) lấy sau khi bỏ mẫu dài hơn 1.024 token; không đặt `LIMIT` thì lấy hết. (Với `gsm8k` và `s1k`, `LIMIT=K` vẫn là K mẫu đầu.) Thư mục làm việc là `work-tsdkd-limitK` hoặc `work-tsdkd`. Nguồn dữ liệu đổi bằng `TSDKD_SOURCE=<id trên Hub hoặc file jsonl>`.
+
+Các bước chạy riêng lẻ, theo thứ tự: `scripts/score_gain.sh` (lọc, chuẩn bị, chấm gain student và teacher, tạo chỉ mục span và `span-gains.json`), `scripts/span_kd_train.sh` (huấn luyện, chọn cấu hình bằng `EXPERIMENTS`), `scripts/span_kd_eval.sh` (đánh giá). `scripts/span_kd_run_all.sh` chạy cả ba; `SKIP_SCORING=1` dùng lại gain đã có.
 
 Với `DATASET=tsdkd`, `scripts/score_gain.sh` giới hạn 1.024 token cho cả hai mô hình; `span_kd_run_all.sh` đặt epoch 2, batch 64, micro-batch 4 (đổi bằng biến môi trường). Student vẫn dùng LoRA như trước (learning rate 1e-4, khác với fine-tune toàn bộ ở bài TSD-KD). Bộ eval vẫn là GSM8K, MATH500, AIME24, AIME25; các benchmark còn lại (GSM-Plus, Minerva Math, MMLU-Pro-Math, ...) chưa có trong `benchmark_eval.py`.
 

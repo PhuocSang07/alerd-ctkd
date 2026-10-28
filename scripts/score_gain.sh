@@ -14,8 +14,11 @@
 # span-gains.json: the student's span gains (for the CE weights) and teacher minus student (for the KL weights).
 # LIMIT=N keeps the first N problems, writes to WORK_DIR-limitN and skips predictability: a cost measurement. The number
 # of probes is printed by token_gain.py / span_index.py, the wall time of each scoring run by answer_gain.py and below.
-# DATASET=s1k scores s1K-1.1 (the deepseek_attempt write-ups, MAX_LEN 1024 tokens) instead of GSM8K. DATASET=tsdkd scores the Math CoT rows of the TSD-KD
-# release (its own prompt, the teacher response as output, 1024 tokens; TSDKD_FILE=<local jsonl> skips the download). SHARD=i/n scores every
+# DATASET=s1k scores s1K-1.1 (the deepseek_attempt write-ups, MAX_LEN 1024 tokens) instead of GSM8K. DATASET=tsdkd scores the Math CoT
+# rows of the TSD-KD release (22,543 rows in phuocsang/UltraInteract-math-Qwen2.5-14B-Instruct-Gen: the release's own prompt, the
+# teacher response as output, 1024 tokens for both models); TSDKD_SOURCE=<Hub id or local jsonl> replaces that source, and then LIMIT=K
+# draws K random rows (seed SAMPLE_SEED, default 10) from those that fit the token limits instead of the first K; no LIMIT = all of them.
+# SHARD=i/n scores every
 # n-th row (starting at i) into WORK_DIR-shard<i>of<n> and stops after the two gain-tokens files: scripts/modal_score_gain.py
 # runs the shards in parallel and merges them (token_gain.py merge), then builds the span index and the signals.
 set -euo pipefail
@@ -60,11 +63,11 @@ mkdir -p "${WORK_DIR}"
 if [[ "${DATASET}" == s1k ]]; then
   "${PYTHON}" prepare_sra_data.py clean-s1k --output "${CLEAN}"
 elif [[ "${DATASET}" == tsdkd ]]; then
-  "${PYTHON}" prepare_sra_data.py clean-tsdkd ${TSDKD_FILE:+--dataset "${TSDKD_FILE}"} --output "${CLEAN}"
+  "${PYTHON}" prepare_sra_data.py clean-tsdkd ${TSDKD_SOURCE:+--dataset "${TSDKD_SOURCE}"} --output "${CLEAN}"
 else
   "${PYTHON}" prepare_sra_data.py clean --output "${CLEAN}"
 fi
-if [[ -n "${LIMIT}" ]]; then
+if [[ -n "${LIMIT}" && "${DATASET}" != tsdkd ]]; then  # tsdkd draws its K random rows after the length filter
   head -n "${LIMIT}" "${CLEAN}" > "${WORK_DIR}/clean.tmp"
   mv "${WORK_DIR}/clean.tmp" "${CLEAN}"
 fi
@@ -76,6 +79,7 @@ for student in ${STUDENTS}; do
   mkdir -p "${out}"
   build_limits=()
   [[ "${DATASET}" != gsm8k ]] && build_limits=(--max-len "${MAX_LEN}" --teacher-max-len "${TEACHER_MAX_LEN}")
+  [[ "${DATASET}" == tsdkd && -n "${LIMIT}" ]] && build_limits+=(--num-samples "${LIMIT}" --sample-seed "${SAMPLE_SEED:-10}")
   "${PYTHON}" prepare_sra_data.py build --clean "${CLEAN}" --student-tokenizer "${student}" \
     --teacher-tokenizer "${TEACHER}" "${build_limits[@]}" --output "${out}/train-sra.jsonl"
   if [[ -n "${SHARD}" ]]; then  # every n-th row of the (filtered) training file

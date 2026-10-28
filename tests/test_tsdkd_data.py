@@ -50,10 +50,30 @@ def test_prompt_is_the_release_user_turn_without_the_extra_instruction():
 @pytest.mark.skipif(BASH is None, reason="bash not available")
 def test_score_gain_cleans_the_release_and_uses_one_limit_for_both_models(tmp_path):
     env = dict(os.environ, PYTHON="echo", STUDENTS="Qwen/Qwen2.5-1.5B-Instruct", TEACHER="Qwen/Qwen2.5-14B-Instruct",
-               DATASET="tsdkd", TSDKD_FILE="release.jsonl")
+               DATASET="tsdkd", TSDKD_SOURCE="release.jsonl", LIMIT="500")
     result = subprocess.run([BASH, "scripts/score_gain.sh", str(tmp_path / "work-tsdkd")], cwd=ROOT, env=env, check=True,
                             capture_output=True, text=True)
     lines = result.stdout.splitlines()
     assert any("clean-tsdkd" in line and "--dataset release.jsonl" in line and "tsdkd-clean.jsonl" in line for line in lines)
     assert any("prepare_sra_data.py build" in line and "--max-len 1024" in line and "--teacher-max-len 1024" in line
-               for line in lines)
+               and "--num-samples 500 --sample-seed 10" in line for line in lines)
+    assert not (tmp_path / "work-tsdkd-limit500" / "clean.tmp").exists()  # no head -n: the sample is drawn after the length filter
+
+
+def test_filtered_rows_pass_through_and_raw_release_rows_are_filtered():
+    from prepare_sra_data import clean_tsdkd_source
+
+    filtered = [{"id": 3, "output": RESPONSE, "answer": "5"}]
+    assert clean_tsdkd_source(filtered) == (filtered, {"rows": 1, "kept": 1, "already_filtered": True})
+    kept, stats = clean_tsdkd_source([release_row(MATH_COT_PREFIX + "\nQ", RESPONSE), release_row("Other\nQ", RESPONSE)])
+    assert len(kept) == 1 and stats["math_cot"] == 1
+
+
+def test_sample_rows_draws_k_in_original_order_and_zero_means_all():
+    from prepare_sra_data import sample_rows
+
+    rows = [{"id": i} for i in range(50)]
+    picked = sample_rows(rows, 10, seed=3)
+    assert len(picked) == 10 and [r["id"] for r in picked] == sorted(r["id"] for r in picked)
+    assert picked == sample_rows(rows, 10, seed=3) and picked != sample_rows(rows, 10, seed=4)
+    assert sample_rows(rows, 0, seed=3) == rows and sample_rows(rows, 80, seed=3) == rows
