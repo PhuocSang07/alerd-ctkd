@@ -16,8 +16,8 @@
 # of probes is printed by token_gain.py / span_index.py, the wall time of each scoring run by answer_gain.py and below.
 # DATASET=s1k scores s1K-1.1 (the deepseek_attempt write-ups, MAX_LEN 1024 tokens) instead of GSM8K. DATASET=tsdkd scores the Math CoT
 # rows of the TSD-KD release (22,543 rows in phuocsang/UltraInteract-math-Qwen2.5-14B-Instruct-Gen: the release's own prompt, the
-# teacher response as output, 1024 tokens for both models); TSDKD_SOURCE=<Hub id or local jsonl> replaces that source, and then LIMIT=K
-# draws K random rows (seed SAMPLE_SEED, default 10) from those that fit the token limits instead of the first K; no LIMIT = all of them.
+# teacher response as output, 1024 tokens for both models); TSDKD_SOURCE=<Hub id or local jsonl> replaces that source. LIMIT=K keeps
+# the first K rows that fit the token limits (in the dataset's order); no LIMIT = all of them.
 # SHARD=i/n scores every
 # n-th row (starting at i) into WORK_DIR-shard<i>of<n> and stops after the two gain-tokens files: scripts/modal_score_gain.py
 # runs the shards in parallel and merges them (token_gain.py merge), then builds the span index and the signals.
@@ -67,7 +67,7 @@ elif [[ "${DATASET}" == tsdkd ]]; then
 else
   "${PYTHON}" prepare_sra_data.py clean --output "${CLEAN}"
 fi
-if [[ -n "${LIMIT}" && "${DATASET}" != tsdkd ]]; then  # tsdkd draws its K random rows after the length filter
+if [[ -n "${LIMIT}" && "${DATASET}" != tsdkd ]]; then  # tsdkd keeps its first K rows after the length filter
   head -n "${LIMIT}" "${CLEAN}" > "${WORK_DIR}/clean.tmp"
   mv "${WORK_DIR}/clean.tmp" "${CLEAN}"
 fi
@@ -79,7 +79,7 @@ for student in ${STUDENTS}; do
   mkdir -p "${out}"
   build_limits=()
   [[ "${DATASET}" != gsm8k ]] && build_limits=(--max-len "${MAX_LEN}" --teacher-max-len "${TEACHER_MAX_LEN}")
-  [[ "${DATASET}" == tsdkd && -n "${LIMIT}" ]] && build_limits+=(--num-samples "${LIMIT}" --sample-seed "${SAMPLE_SEED:-10}")
+  [[ "${DATASET}" == tsdkd && -n "${LIMIT}" ]] && build_limits+=(--num-samples "${LIMIT}")
   "${PYTHON}" prepare_sra_data.py build --clean "${CLEAN}" --student-tokenizer "${student}" \
     --teacher-tokenizer "${TEACHER}" "${build_limits[@]}" --output "${out}/train-sra.jsonl"
   if [[ -n "${SHARD}" ]]; then  # every n-th row of the (filtered) training file

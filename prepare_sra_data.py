@@ -20,7 +20,6 @@ student or teacher would straddle the prompt/output boundary, the row fails the 
 """
 import argparse
 import json
-import random
 import re
 import statistics
 from pathlib import Path
@@ -135,12 +134,9 @@ def clean_tsdkd_source(rows):
     return clean_tsdkd_rows(rows)
 
 
-def sample_rows(rows, count, seed):
-    """`count` rows drawn without replacement (kept in their original order); 0 or too few rows: all of them."""
-    if not count or count >= len(rows):
-        return rows
-    chosen = sorted(random.Random(seed).sample(range(len(rows)), count))
-    return [rows[i] for i in chosen]
+def first_rows(rows, count):
+    """The first `count` rows in their original order; 0 or more than there are: all of them."""
+    return rows[:count] if count else rows
 
 
 def clean_s1k_rows(rows):
@@ -251,8 +247,7 @@ def main(argv=None):
     b.add_argument("--max-len", type=int, help="drop rows longer than this many student tokens (prompt + output)")
     b.add_argument("--teacher-max-len", type=int, help="drop rows longer than this many teacher tokens")
     b.add_argument("--num-samples", type=int, default=0,
-                   help="keep this many random rows after the length filter (0 = all of them)")
-    b.add_argument("--sample-seed", type=int, default=10)
+                   help="keep the first this many rows that pass the length filter (0 = all of them)")
     b.add_argument("--output", required=True)
     args = parser.parse_args(argv)
 
@@ -281,7 +276,7 @@ def main(argv=None):
     clean = read_jsonl(args.clean)
     rows = build_rows(clean, student, teacher, args.max_len, args.teacher_max_len)
     usable = len(rows)
-    rows = sample_rows(rows, args.num_samples, args.sample_seed)
+    rows = first_rows(rows, args.num_samples)
     write_jsonl(args.output, rows)
     print(f"{len(rows)} samples -> {args.output} ({len(clean) - usable} dropped as longer than the token limits"
           + (f", {usable - len(rows)} left out by --num-samples {args.num_samples}" if len(rows) < usable else "") + ")")

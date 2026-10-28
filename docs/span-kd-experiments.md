@@ -110,7 +110,7 @@ DATASET=tsdkd LIMIT=1000 bash scripts/span_kd_run_all.sh   # chấm gain (GPU) -
 DATASET=tsdkd bash scripts/span_kd_run_all.sh              # không đặt LIMIT: dùng toàn bộ 21.347 mẫu vừa 1.024 token
 ```
 
-`LIMIT=K` với `DATASET=tsdkd` là **K mẫu ngẫu nhiên** (seed `SAMPLE_SEED`, mặc định 10) lấy sau khi bỏ mẫu dài hơn 1.024 token; không đặt `LIMIT` thì lấy hết. (Với `gsm8k` và `s1k`, `LIMIT=K` vẫn là K mẫu đầu.) Thư mục làm việc là `work-tsdkd-limitK` hoặc `work-tsdkd`. Nguồn dữ liệu đổi bằng `TSDKD_SOURCE=<id trên Hub hoặc file jsonl>`.
+`LIMIT=K` với `DATASET=tsdkd` là **K mẫu đầu theo thứ tự của bộ dữ liệu**, lấy sau khi bỏ mẫu dài hơn 1.024 token; không đặt `LIMIT` thì lấy hết. (Với `gsm8k` và `s1k`, `LIMIT=K` cũng là K mẫu đầu.) Thư mục làm việc là `work-tsdkd-limitK` hoặc `work-tsdkd`. Nguồn dữ liệu đổi bằng `TSDKD_SOURCE=<id trên Hub hoặc file jsonl>`.
 
 Các bước chạy riêng lẻ, theo thứ tự: `scripts/score_gain.sh` (lọc, chuẩn bị, chấm gain student và teacher, tạo chỉ mục span và `span-gains.json`), `scripts/span_kd_train.sh` (huấn luyện, chọn cấu hình bằng `EXPERIMENTS`), `scripts/span_kd_eval.sh` (đánh giá). `scripts/span_kd_run_all.sh` chạy cả ba; `SKIP_SCORING=1` dùng lại gain đã có.
 
